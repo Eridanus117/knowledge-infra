@@ -1,0 +1,12 @@
+{
+  "name": "kb-mermaid-validator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Mermaid parser sidecar for kb check",
+  "dependencies": {
+    "dompurify": "3.4.9",
+    "jsdom": "27.3.0",
+    "mermaid": "11.15.0"
+  }
+}
