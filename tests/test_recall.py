@@ -1,0 +1,122 @@
+import json
+
+from typer.testing import CliRunner
+
+from memex.cli import app
+from memex.lexical import Hit
+
+runner = CliRunner()
+
+
+class _FakeLexical:
+    def __init__(self, *_a, **_k) -> None:
+        pass
+
+    def search(self, text: str, k: int = 10, repo: str | None = None) -> list[Hit]:
+        return [
+            Hit(
+                object_key="kb:doc:a",
+                score=2.5,
+                title="文档模板",
+                path="kb/a.md",
+                repo="myrepo",
+            ),
+            Hit(
+                object_key="kb:doc:b",
+                score=1.0,
+                title="示例文档",
+                path="kb/b.md",
+                repo="myrepo",
+            ),
+        ]
+
+
+def test_recall_json_contract(monkeypatch) -> None:
+    monkeypatch.setattr("memex.engine.Engine", _FakeLexical)
+    monkeypatch.setattr("memex.recall._doc_lookup", lambda repo: {})
+    result = runner.invoke(
+        app, ["recall", "文档", "--lane", "lexical", "--format", "json"]
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert [h["object_key"] for h in payload["hits"]] == ["kb:doc:a", "kb:doc:b"]
+    # title/path 富化(_doc_lookup 空 → 回落 hit 自带字段)。
+    assert payload["hits"][0]["title"] == "文档模板"
+    assert payload["hits"][0]["path"] == "kb/a.md"
+
+
+def test_recall_respects_limit(monkeypatch) -> None:
+    captured: dict[str, int] = {}
+
+    class _Cap(_FakeLexical):
+        def search(self, text: str, k: int = 10, repo: str | None = None) -> list[Hit]:
+            captured["k"] = k
+            return super().search(text, k, repo)
+
+    monkeypatch.setattr("memex.engine.Engine", _Cap)
+    monkeypatch.setattr("memex.recall._doc_lookup", lambda repo: {})
+    result = runner.invoke(app, ["recall", "文档", "--lane", "lexical", "--limit", "3"])
+    assert result.exit_code == 0, result.stdout
+    assert captured["k"] == 3
+
+
+def test_recall_text_output(monkeypatch) -> None:
+    monkeypatch.setattr("memex.engine.Engine", _FakeLexical)
+    monkeypatch.setattr("memex.recall._doc_lookup", lambda repo: {})
+    result = runner.invoke(app, ["recall", "文档", "--lane", "lexical"])
+    assert result.exit_code == 0, result.stdout
+    assert "文档模板" in result.stdout
+    assert "kb:doc:a" in result.stdout
+
+
+def test_recall_threads_facets_to_engine(monkeypatch) -> None:
+    from memex.facets import Facets
+
+    captured: dict = {}
+
+    class _Cap(_FakeLexical):
+        def search(self, text, k=10, repo=None, facets=None):
+            captured["facets"] = facets
+            return super().search(text, k, repo)
+
+    monkeypatch.setattr("memex.engine.Engine", _Cap)
+    monkeypatch.setattr("memex.recall._doc_lookup", lambda repo: {})
+    result = runner.invoke(
+        app,
+        [
+            "recall",
+            "文档",
+            "--lane",
+            "lexical",
+            "--domain",
+            "decisions/",
+            "--kind",
+            "decision",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert captured["facets"] == Facets(domain="decisions", kind="decision")
+
+
+def test_recall_no_facets_does_not_pass_kwarg(monkeypatch) -> None:
+    # 不收窄时不传 facets kwarg → 旧引擎签名/默认路径零变化。
+    captured: dict = {}
+
+    class _Strict(_FakeLexical):
+        def search(self, text, k=10, repo=None):  # 无 facets 参数
+            captured["called"] = True
+            return super().search(text, k, repo)
+
+    monkeypatch.setattr("memex.engine.Engine", _Strict)
+    monkeypatch.setattr("memex.recall._doc_lookup", lambda repo: {})
+    result = runner.invoke(app, ["recall", "文档", "--lane", "lexical"])
+    assert result.exit_code == 0, result.stdout
+    assert captured["called"]
+
+
+def test_recall_facets_require_central(monkeypatch) -> None:
+    from memex.config import Settings
+
+    monkeypatch.setattr("memex.recall.settings", Settings(read_from_central=False))
+    result = runner.invoke(app, ["recall", "文档", "--kind", "decision"])
+    assert result.exit_code == 2

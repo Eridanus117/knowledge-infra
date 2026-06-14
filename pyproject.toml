@@ -1,0 +1,73 @@
+[build-system]
+# uv_build: 纯 Python 甜区。命中 C/Rust 扩展 / build hook / VCS 动态版本 /
+# 隐式 namespace 包(无 __init__.py) 任一 → 换 hatchling。
+requires = ["uv_build>=0.11.19,<0.12"]
+build-backend = "uv_build"
+
+[project]
+name = "memex"
+version = "0.1.0"
+description = "Local-first KB hybrid retrieval engine (lexical BM25 + semantic qdrant + hybrid RRF)."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Eridanus" }]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "typer>=0.12",
+    "pydantic-settings>=2.0",
+    "structlog>=24.0",
+    "bm25s>=0.3.9",
+    "jieba>=0.42.1",
+    "numpy>=2.4.6",
+]
+
+[project.scripts]
+memex = "memex.cli:run"
+memex-sync = "memex.indexing.cli:run"
+
+[dependency-groups]
+# ruff/pyrefly 不入此组: 走全局 uv tool 装一次 (各仓 .venv 只剩纯 Python, 避免每个
+# 新仓 sync 都拉原生二进制触发本地安全软件重扫)。一次性: uv tool install ruff pyrefly
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+    "pytest-mock",
+    "pytest-randomly",
+    "poethepoet",
+]
+# 出单文件 binary (脱 Python, 本地安全软件只需放行一次): uv run --group freeze poe freeze
+freeze = ["pyinstaller>=6.0"]
+
+[tool.poe.tasks]
+lint = "ruff check ."
+fmt = "ruff format ."
+typecheck = "pyrefly check"
+test = "pytest"
+check = { sequence = ["lint", "typecheck", "test"], help = "lint + typecheck + test" }
+freeze = { cmd = "pyinstaller --onefile --clean --name memex src/memex/cli.py", help = "打单文件 binary 到 dist/" }
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+
+[tool.ruff.lint.flake8-bugbear]
+# typer 的 x = typer.Option(...) 默认值是惯用法, 不是 B008 真问题
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
+
+[tool.coverage.run]
+source = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
