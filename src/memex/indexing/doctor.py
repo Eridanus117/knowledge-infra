@@ -67,7 +67,9 @@ class ConsistencyReport:
         lines = [self.summary()]
         if self.orphans:
             for o in self.orphans:
-                lines.append(f"  - {o.identity} (src={o.source_path}) → 缺 {o.expected_path}")
+                lines.append(
+                    f"  - {o.identity} (src={o.source_path}) → 缺 {o.expected_path}"
+                )
             lines.append(FIX_HINT)
         return "\n".join(lines)
 
@@ -80,7 +82,11 @@ class ConsistencyReport:
         if self.error:
             return head
         ex = "; ".join(o.identity for o in self.orphans[:examples])
-        more = "" if len(self.orphans) <= examples else f" …+{len(self.orphans) - examples}"
+        more = (
+            ""
+            if len(self.orphans) <= examples
+            else f" …+{len(self.orphans) - examples}"
+        )
         return f"{head}\n例: {ex}{more}"
 
 

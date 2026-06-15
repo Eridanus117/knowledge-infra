@@ -58,7 +58,9 @@ class BoomQdrant(Qdrant):
         raise QdrantError("connection refused")
 
 
-def _pt(identity: str, *, managed: bool = True, source_path: str = "d/x.md") -> dict[str, Any]:
+def _pt(
+    identity: str, *, managed: bool = True, source_path: str = "d/x.md"
+) -> dict[str, Any]:
     pl: dict[str, Any] = {"identity": identity, "source_path": source_path}
     if managed:
         pl["point_kind"] = POINT_KIND
@@ -112,7 +114,15 @@ def test_unmanaged_points_ignored(tmp_path: Path) -> None:
 
 
 def test_malformed_identity_skipped(tmp_path: Path) -> None:
-    fake = FakeQdrant([_pt("no-colon-here"), {"id": "x", "payload": {"point_kind": POINT_KIND, "index_profile": INDEX_PROFILE}}])
+    fake = FakeQdrant(
+        [
+            _pt("no-colon-here"),
+            {
+                "id": "x",
+                "payload": {"point_kind": POINT_KIND, "index_profile": INDEX_PROFILE},
+            },
+        ]
+    )
     rep = check_compiled_consistency(fake, tmp_path, collection=COLL)
     assert rep.healthy
     assert rep.total_points == 0
