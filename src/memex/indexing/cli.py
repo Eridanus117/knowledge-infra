@@ -7,7 +7,8 @@
 sync 内部先 compile;默认 dry-run(零写入), --apply 才动 qdrant + 落盘 compiled。
 sync-all = orchestrator: 遍历 registry(真相收敛到 kb-sources.toml)串行各仓,
 单仓失败记录继续。退出码: 0 = 全绿;1 = 任一仓硬失败;2 = 无硬失败但有
-prune 守卫拒绝(需人工确认后 --force)。
+prune 守卫拒绝(需人工确认后 --force);3 = 无 1/2 但有内容完整性发现
+(0-doc 仓 / 域内静默 skip,供日审 cadence 检测告警)。
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from pathlib import Path
 import typer
 
 from memex.config import settings
+from memex.indexing.integrity import IntegrityReport
 from memex.indexing.pipeline import (
     PruneResult,
     compile_repo,
@@ -32,6 +34,10 @@ app = typer.Typer(
 # M-3: 退出码语义(主线已拍)。
 EXIT_FAILURE = 1  # 硬失败(单仓 error / 单篇失败 / 崩溃)
 EXIT_NEEDS_FORCE = 2  # 无硬失败, 但 prune 守卫拒绝 → 需人工介入(--force)
+# 无硬失败、无 prune 拒绝, 但有内容完整性发现(0-doc 仓 / 域内静默 skip)→ distinct
+# 退出码, 供日审 cadence 检测告警。优先级低于 NEEDS_FORCE/FAILURE(那两个要人立刻
+# 处置), 这个是可被自动检测的告警信号。
+EXIT_INTEGRITY = 3
 
 
 @app.callback()
@@ -80,6 +86,14 @@ def _echo_prune(pr: PruneResult, repo: str, out_dir: Path) -> bool:
     return False
 
 
+def _echo_integrity(integ: IntegrityReport) -> None:
+    """显眼打印跨仓完整性 section(无发现则静默)。"""
+    section = integ.render()
+    if section:
+        typer.echo("")
+        typer.echo(section)
+
+
 @app.command(name="compile")
 def compile_cmd(
     repo: list[str] = typer.Option(
@@ -95,7 +109,8 @@ def compile_cmd(
 ) -> None:
     """扫源仓 → 编译 kb-note-v1 → 落盘 + stale 清理 + 报告(--dry-run 只报告)。
 
-    退出码: 0 全绿 / 2 stale 清理守卫拒绝需人工 --force。
+    退出码: 0 全绿 / 2 stale 清理守卫拒绝需人工 --force / 3 内容完整性发现
+    (0-doc 仓 / 域内静默 skip)。
     """
     repos, degraded_warn = _resolve_repos(repo)
     if degraded_warn:
@@ -105,9 +120,11 @@ def compile_cmd(
     total_indexed = 0
     total_written = 0
     any_needs_force = False
+    integ = IntegrityReport()
     for name, path in repos.items():
         result = compile_repo(name, path)
         typer.echo(result.report.render())
+        integ.add_repo(result.report)
         total_indexed += result.report.indexed
         if not dry_run and result.docs:
             written = persist(result.docs, out_dir, result.canonical_repo)
@@ -131,8 +148,11 @@ def compile_cmd(
     typer.echo(
         f"[{mode}] indexed {total_indexed} doc(s){tail} across {len(repos)} repo(s)"
     )
+    _echo_integrity(integ)
     if any_needs_force:
         raise typer.Exit(code=EXIT_NEEDS_FORCE)
+    if integ.has_findings:
+        raise typer.Exit(code=EXIT_INTEGRITY)
 
 
 @app.command(name="sync")
@@ -152,7 +172,8 @@ def sync_cmd(
 ) -> None:
     """compile + qdrant sync(两级 reuse + prune 守卫);默认 dry-run 只报告。
 
-    退出码: 0 全绿 / 1 硬失败 / 2 prune 守卫拒绝需人工 --force。
+    退出码: 0 全绿 / 1 硬失败 / 2 prune 守卫拒绝需人工 --force / 3 内容完整性发现
+    (仅在无 1/2 时)。
     """
     from memex.indexing.sync import sync_repo
 
@@ -163,9 +184,11 @@ def sync_cmd(
 
     any_error = False
     any_needs_force = False
+    integ = IntegrityReport()
     for name, path in repos.items():
         c_out, s_rep = sync_repo(name, path, apply=apply, force=force)
         typer.echo(c_out.report.render())
+        integ.add_repo(c_out.report)
         typer.echo(s_rep.render())
         if apply and c_out.docs:
             written = persist(c_out.docs, out_dir, c_out.canonical_repo)
@@ -182,10 +205,13 @@ def sync_cmd(
         any_error = any_error or bool(s_rep.error) or bool(s_rep.failures)
         any_needs_force = any_needs_force or s_rep.needs_force
         typer.echo("")
+    _echo_integrity(integ)
     if any_error:
         raise typer.Exit(code=EXIT_FAILURE)
     if any_needs_force:
         raise typer.Exit(code=EXIT_NEEDS_FORCE)
+    if integ.has_findings:
+        raise typer.Exit(code=EXIT_INTEGRITY)
 
 
 @app.command(name="sync-all")
@@ -202,7 +228,8 @@ def sync_all_cmd(
 ) -> None:
     """orchestrator: 遍历 registry 串行 sync 各源仓;单仓失败继续。
 
-    退出码: 0 全绿 / 1 任一仓硬失败 / 2 无硬失败但有 prune 拒绝(需人工 --force)。
+    退出码: 0 全绿 / 1 任一仓硬失败 / 2 无硬失败但有 prune 拒绝(需人工 --force)/
+    3 无 1/2 但有内容完整性发现(日审 cadence 据此告警)。
     """
     from memex.indexing.sync import sync_repo
 
@@ -213,6 +240,7 @@ def sync_all_cmd(
     all_failures: list[tuple[str, str]] = []
     needs_force: list[tuple[str, str]] = []  # (repo, prune_refused 文案)
     failed_repos = 0
+    integ = IntegrityReport()
     for name, path in reg.repos.items():
         try:
             c_out, s_rep = sync_repo(name, path, apply=apply, force=force)
@@ -222,6 +250,7 @@ def sync_all_cmd(
             failed_repos += 1
             continue
         typer.echo(c_out.report.render())
+        integ.add_repo(c_out.report)
         typer.echo(s_rep.render())
         if apply and c_out.docs:
             written = persist(c_out.docs, out_dir, c_out.canonical_repo)
@@ -259,11 +288,14 @@ def sync_all_cmd(
         typer.echo(f"需人工介入(--force) [{len(needs_force)}]:")
         for name, msg in needs_force:
             typer.echo(f"  - {name}: {msg}")
+    _echo_integrity(integ)
     if failed_repos:
         typer.echo(f"{failed_repos} repo(s) failed")
         raise typer.Exit(code=EXIT_FAILURE)
     if needs_force:
         raise typer.Exit(code=EXIT_NEEDS_FORCE)
+    if integ.has_findings:
+        raise typer.Exit(code=EXIT_INTEGRITY)
 
 
 def run() -> None:
