@@ -44,8 +44,8 @@ dev = [
 freeze = ["pyinstaller>=6.0"]
 
 [tool.poe.tasks]
-lint = "ruff check ."
-fmt = "ruff format ."
+lint = "uvx ruff@0.15.16 check ."
+fmt = "uvx ruff@0.15.16 format ."
 typecheck = "pyrefly check"
 test = "pytest"
 check = { sequence = ["lint", "typecheck", "test"], help = "lint + typecheck + test" }

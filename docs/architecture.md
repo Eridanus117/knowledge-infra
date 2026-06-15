@@ -41,8 +41,9 @@ script:`memex`(读)、`memex-sync`(写)。
 
 | 模块 | 职责 | 关键符号 |
 |---|---|---|
-| `indexing/cli.py` | `memex-sync` 入口:`compile` / `sync` / `sync-all`(orchestrator);退出码 0/1/2 | `compile_cmd`、`sync_cmd`、`sync_all_cmd`、`_resolve_repos` |
+| `indexing/cli.py` | `memex-sync` 入口:`compile` / `sync` / `sync-all`(orchestrator);退出码 0/1/2/3 | `compile_cmd`、`sync_cmd`、`sync_all_cmd`、`_resolve_repos` |
 | `indexing/scan.py` | 扫源仓 + domain 派生(INDEX 节点链)+ identity 派生 + 域守卫 | `discover_domains`、`scan_notes`、`derive_identity`、`repo_name`、`ScanError` |
+| `indexing/integrity.py` | compile 内容完整性发现(ZERO_DOC / DOMAIN_SKIP)→ 结构化告警 + 退出码 3 | `findings_for_report`、`IntegrityReport`、`IntegrityFinding` |
 | `indexing/compile.py` | note → compiled doc(可索引性闸门 / kind enum / source_hash / commit_time) | `compile_note`、`CompiledDoc`、`embed_text`、`write_compiled`、`KINDS` |
 | `indexing/pipeline.py` | 单仓编排:扫描 + 编译 + 报告(+ 落盘 persist) | `compile_repo`、`CompileOutput`、`persist` |
 | `indexing/sync.py` | qdrant 写 sync:两级 reuse + unit-mode 断言 + prune 三守卫 + payload | `sync_repo`、`point_id`、`build_payload`、`ensure_collection`、`SyncReport` |
@@ -80,7 +81,7 @@ planner(`planner.py`)做确定性 query 语言分类:中文低锚 = 有 CJK 且�
 3. **编排**(`pipeline.py`):`compile_repo` 单仓扫+编+报告;`persist` 落 compiled JSON 到 `<compiled_dir>/<repo>/`(中央数据目录,源仓零污染)。
 4. **sync**(`sync.py`):`sync_repo` 逐篇决策——① point_id 命中且 text_hash 同 → 只补 payload / skip;② point_id miss 但 (text_hash, embedding_profile) 现存 → 复用向量 re-key(零 embed);③ 都 miss → embed + upsert。再 prune diff。默认 dry-run,`--apply` 才动 qdrant。
 
-入口 `memex-sync`(`indexing/cli.py`):`compile`(只编译落盘)、`sync`(单/指定仓)、`sync-all`(orchestrator 遍历 registry 串行,单仓崩溃不中断全批)。退出码 **0 全绿 / 1 硬失败 / 2 prune 守卫拒绝(需人工 `--force`)**。
+入口 `memex-sync`(`indexing/cli.py`):`compile`(只编译落盘)、`sync`(单/指定仓)、`sync-all`(orchestrator 遍历 registry 串行,单仓崩溃不中断全批)。退出码 **0 全绿 / 1 硬失败 / 2 prune 守卫拒绝(需人工 `--force`)/ 3 内容完整性发现**(0-doc 仓 / 域内静默 skip;仅在无 1/2 时,供日审 cadence 检测告警,见 `indexing/integrity.py`)。
 
 ## 5. registry / config
 
@@ -114,7 +115,7 @@ planner(`planner.py`)做确定性 query 语言分类:中文低锚 = 有 CJK 且�
 
 1. `sync_all_cmd` 读 registry(降级则 WARN),遍历各源仓串行 `sync_repo`,单仓崩溃记录继续。
 2. 每仓:`compile_repo`(扫+编+报告)→ qdrant `ensure_collection`(不存在则建中央 collection + payload index)→ `_assert_unit_mode` 断言 → 逐篇两级 reuse 决策 → prune diff 三守卫 → 写阶段(set_payload / re-key upsert / embed+upsert / delete prune)→ `persist` 落 compiled。
-3. 汇总各仓 summary + 失败清单 + 需 `--force` 清单;有硬失败 exit 1,否则有 prune 拒绝 exit 2。
+3. 汇总各仓 summary + 失败清单 + 需 `--force` 清单 + 内容完整性 section;有硬失败 exit 1,否则有 prune 拒绝 exit 2,否则有完整性发现 exit 3。
 
 ## 8. 改 X 去哪
 
