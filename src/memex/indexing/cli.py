@@ -298,6 +298,32 @@ def sync_all_cmd(
         raise typer.Exit(code=EXIT_INTEGRITY)
 
 
+@app.command(name="doctor")
+def doctor_cmd(
+    out: Path = typer.Option(
+        None, "--out", help=f"compiled doc 落点(默认 {settings.compiled_dir})"
+    ),
+) -> None:
+    """对账中央 collection 点 ↔ 盘上 compiled: 孤儿(compiled_doc_missing)→ exit≠0。
+
+    Pharos CommandCheck 入口(周期 backstop): exit 0 全绿; 非 0 = 有孤儿点或读失败,
+    stderr 带诊断摘要(数量+修法+例子)。孤儿 = 向量在、compiled 文件缺 → recall
+    semantic 降级 lexical。诊断直接跑本命令看全量明细; 修见 stderr 提示。
+    """
+    from memex.indexing.doctor import check_compiled_consistency
+    from memex.indexing.qdrant import Qdrant
+
+    out_dir = out.expanduser() if out is not None else settings.compiled_dir
+    report = check_compiled_consistency(
+        Qdrant(settings), out_dir, collection=settings.central_collection
+    )
+    typer.echo(report.render())  # 全量明细进 stdout
+    if report.healthy:
+        return
+    typer.echo(report.alert_detail(), err=True)  # 摘要进 stderr(Pharos 抓为 detail)
+    raise typer.Exit(code=EXIT_FAILURE)
+
+
 def run() -> None:
     """Console-script entry。"""
     app()
