@@ -1,3 +1,9 @@
+---
+description: memex 引擎级 codemap:读路径(recall/hybrid/lexical/semantic/planner)、写路径(indexing 子包)、registry/config、核心不变量与改某类东西去哪。
+keywords: [memex, architecture, codemap, recall, indexing]
+kind: reference
+---
+
 # memex 架构
 
 > 给新读者的一页地图:memex 是什么、读/写两条路径由哪些模块拼成、改某类东西去哪个文件。

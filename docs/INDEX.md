@@ -1,3 +1,9 @@
+---
+description: memex 引擎的长期开发文档域:读/写两条路径的架构、设计取舍与改动入口。
+keywords: [memex, architecture, recall, indexing, hybrid]
+kind: index
+---
+
 # memex docs
 
 memex 引擎自己的长期开发文档。

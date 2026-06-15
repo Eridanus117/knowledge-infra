@@ -1,3 +1,9 @@
+---
+description: memex 怎么运作、为什么这么设计:三条检索 lane、RRF 融合、读写两路径、关键取舍(理解导向)。
+keywords: [memex, overview, recall, hybrid, rrf]
+kind: note
+---
+
 # memex 概览
 
 > 讲 memex 怎么运作、为什么这么设计(理解导向)。要看模块地图、改某类东西去哪个文件 → [architecture](architecture.md);逐条用法 → `memex --help` / `memex-sync --help`。本文不讲安装、不列字段、不复述 codemap。
