@@ -257,6 +257,25 @@ class TestAdopt(unittest.TestCase):
                     cwd=Path("/"),
                 )
 
+    def test_gate_command_missing_fails_closed(self):
+        # The gate command not resolving must FAIL the adopt, not warn-and-continue:
+        # a registered repo whose KB check never runs in the hook's fresh shell is
+        # exactly the silent drift adopt exists to prevent.
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            repo = self._repo(ws, domain="docs")
+            before = reg.read_text()
+            with self.assertRaisesRegex(AdoptUsageError, "not on PATH"):
+                run_adopt(
+                    "proj",
+                    registry=reg,
+                    runner=_Runner(),
+                    which=lambda n: None if n == "rhizome" else f"/fake/bin/{n}",
+                    cwd=Path("/"),
+                )
+            self.assertEqual(reg.read_text(), before)  # probe-before-write: nothing written
+            self.assertFalse((repo / "lefthook.yml").exists())
+
     def test_failed_recovery_rerun_converges(self):
         # Step ② failed (missing -d/-k); re-run WITH them must finish the job.
         with tempfile.TemporaryDirectory() as tmp:

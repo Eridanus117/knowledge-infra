@@ -26,6 +26,14 @@ SKIPPED = "skipped"
 
 _DEFAULT_WORKSPACE_ROOT = "~/workspace"
 
+# The single source of truth for the gate command name. The lefthook template
+# below invokes `<_GATE_COMMAND> check ...`, and the fail-closed PATH probe in
+# _lefthook_state checks `which(_GATE_COMMAND)`. Keeping both on this one
+# constant is what makes them rename-safe TOGETHER: a future rename that misses
+# one place writes a broken hook, and `rhizome doctor --self` asserts the
+# template's command == this constant == on PATH.
+_GATE_COMMAND = "rhizome"
+
 # Per-file contract check plus the repo-level duplicate-domain and frozen
 # delete/rename guards.
 LEFTHOOK_YML = """\
@@ -208,7 +216,10 @@ def _write_index(
 def _lefthook_state(repo_root: Path, runner, which) -> dict:
     state: dict = {
         "binary": which("lefthook"),
-        "kb_on_path": which("rhizome") is not None or which("kb") is not None,
+        # The gate command the template actually invokes: probe the REAL command
+        # via the shared constant, not a dead alias. `doctor --self` asserts this
+        # constant == the template's command.
+        "gate_on_path": which(_GATE_COMMAND) is not None,
         "yml_exists": (repo_root / "lefthook.yml").is_file(),
         "yml_has_kb_check": False,
         "hooks_path": None,
@@ -328,9 +339,14 @@ def run_adopt(
     gate_via_precommit = lh["precommit_gate"] and not lh["yml_exists"]
     if lh["binary"] is None and not gate_via_precommit:
         raise AdoptUsageError("lefthook not found on PATH (brew install lefthook)")
-    if not lh["kb_on_path"]:
-        warnings.append(
-            "`rhizome` not on PATH — the hook runs in a fresh shell and will fail; check ~/.local/bin"
+    if not lh["gate_on_path"]:
+        # Fail closed, never warn-and-continue: a repo registered with a gate command
+        # that dies in the hook's fresh shell is precisely the silent drift adopt exists
+        # to prevent (the registry/index steps already self-verify before declaring done).
+        raise AdoptUsageError(
+            "`rhizome` not on PATH — the lefthook gate would be written but fail in the "
+            "hook's fresh shell, leaving a registered repo whose KB check never runs. "
+            "Install it (~/.local/bin) and re-run."
         )
     if not gate_via_precommit:
         for mgr in lh["other_manager"]:

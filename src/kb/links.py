@@ -14,13 +14,32 @@ frozen 文档整篇豁免: 只读历史,链向已删 design 稿是故意留痕(�
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from kb import contract, sources
 from kb.check import ERROR, WARN, _WALK_SKIP_DIRS, Finding
 
 # code 解析根: 仓自身 / workspace / workspace 下已知聚合目录（按需扩展）。
+# 公开默认为空(中性); 项目特有的聚合目录名经 env 注入, 有效集合 = 默认 ∪ env。
 _EXTRA_CODE_ROOT_NAMES: tuple[str, ...] = ()
+_CODE_ROOTS_ENV = "RHIZOME_CODE_ROOTS"
+
+
+def _extra_code_root_names() -> tuple[str, ...]:
+    """有效 code 聚合目录名 = 默认 ∪ $RHIZOME_CODE_ROOTS(逗号分隔, 去重去空)。
+
+    env 未设 → 纯默认; 空串/多余空格/空项忽略; 保序去重。
+    """
+    seen: list[str] = list(_EXTRA_CODE_ROOT_NAMES)
+    raw = os.environ.get(_CODE_ROOTS_ENV)
+    if raw:
+        for part in raw.split(","):
+            name = part.strip()
+            if name and name not in seen:
+                seen.append(name)
+    return tuple(seen)
+
 
 _slug_cache: dict[Path, set[str]] = {}
 _foreign_cache: dict[str, set[str]] = {}
@@ -68,7 +87,7 @@ def _workspace_root() -> Path:
 def _code_resolvable(entry: str, repo_root: Path) -> bool:
     rel = entry.split("#", 1)[0].strip()
     ws = _workspace_root()
-    roots = [repo_root, ws, *(ws / n for n in _EXTRA_CODE_ROOT_NAMES)]
+    roots = [repo_root, ws, *(ws / n for n in _extra_code_root_names())]
     return any((r / rel).exists() for r in roots)
 
 
