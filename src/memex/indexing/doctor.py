@@ -1,6 +1,6 @@
 """读侧一致性 doctor: 中央 collection 的点 ↔ 盘上 compiled 文件对账。
 
-issue-example: 向量在、compiled 文件不在盘 = compiled_doc_missing 孤儿点 → recall 读路径把
+向量在、compiled 文件不在盘 = compiled_doc_missing 孤儿点 → recall 读路径把
 该 hit gate 出 semantic 池、降级 lexical(见 health.stale_drop_reason)。读侧只在
 查询时被动发现, 写侧此前零巡检。本 doctor 是写侧 backstop: 扫一遍中央 collection,
 有孤儿 exit≠0, 由 Pharos CommandCheck cadence 抓出来 → session-start 露出 → agent

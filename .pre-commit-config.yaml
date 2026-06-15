@@ -11,7 +11,7 @@ repos:
     rev: "0.11.19"
     hooks:
       - id: uv-lock
-  # KB commit gate (ADR-029). 接到既有 pre-commit 框架而非 lefthook: 装 lefthook 会
+  # KB commit gate. 接到既有 pre-commit 框架而非 lefthook: 装 lefthook 会
   # 改名 pre-commit hook 为 .old、静默废掉 ruff/uv 检查。rhizome check 是 domain-aware
   # 的(只校验 KB 域内变更 md), 域外文件跳过。
   - repo: local

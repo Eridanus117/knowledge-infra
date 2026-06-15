@@ -1,4 +1,4 @@
-"""doctor 单测: 中央 collection 点 ↔ 盘上 compiled 对账(issue-example)。
+"""doctor 单测: 中央 collection 点 ↔ 盘上 compiled 对账。
 
 qdrant 用最小内存替身(只需 collection_exists + scroll);compiled 文件用真
 safe_filename 落到 tmp, 留一部分缺失模拟孤儿。
