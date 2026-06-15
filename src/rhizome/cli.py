@@ -195,7 +195,7 @@ def _build_parser() -> argparse.ArgumentParser:
     dom.add_argument(
         "--diff",
         action="store_true",
-        help="completeness check: discovered domains × actually-indexed",
+        help="completeness check: discovered domains vs actually-indexed",
     )
     dom.add_argument("--json", action="store_true", help="emit as JSON")
 
@@ -633,7 +633,9 @@ def _print_self_report(report: dict) -> None:
         stream = sys.stdout if c["status"] == doctor.PASS else sys.stderr
         print(f"  {sym} {c['check']:<22} {c['detail']}", file=stream)
     if report["ok"]:
-        print(f"doctor --self: ok ({len(report['checks'])} check(s), gate template ⇔ probe consistent)")
+        print(
+            f"doctor --self: ok ({len(report['checks'])} check(s), gate template ⇔ probe consistent)"
+        )
     else:
         n_fail = sum(1 for c in report["checks"] if c["status"] != doctor.PASS)
         print(
@@ -649,7 +651,9 @@ def _cmd_doctor(args) -> int:
     want_sources = args.sources or args.all_checks
     want_self = args.self_check or args.all_checks
     if not (want_sources or want_self):
-        print("rhizome doctor: pass --sources and/or --self (or --all)", file=sys.stderr)
+        print(
+            "rhizome doctor: pass --sources and/or --self (or --all)", file=sys.stderr
+        )
         return 2
 
     sources_report = self_report = None

@@ -102,7 +102,10 @@ def _gate_resolvable(which) -> tuple[bool, str]:
     resolved = which("rhizome")
     if resolved:
         return True, f"which(rhizome)={resolved}"
-    return False, "which(rhizome)=None — gate command not on PATH (gate would exit 127 in the hook's fresh shell)"
+    return (
+        False,
+        "which(rhizome)=None — gate command not on PATH (gate would exit 127 in the hook's fresh shell)",
+    )
 
 
 def _index_present(repo_root: Path) -> tuple[bool, str, list[str]]:
@@ -119,7 +122,9 @@ def _index_present(repo_root: Path) -> tuple[bool, str, list[str]]:
     return False, f"no {contract.INDEX_FILENAME} domain found under {repo_root}", []
 
 
-def check_source(name: str, repo_path: Path, *, gate_resolvable: tuple[bool, str], which) -> dict:
+def check_source(
+    name: str, repo_path: Path, *, gate_resolvable: tuple[bool, str], which
+) -> dict:
     """Probe one registered source repo. Pure (no printing).
 
     `gate_resolvable` is computed once for the fleet (it is a workstation-global
@@ -132,8 +137,13 @@ def check_source(name: str, repo_path: Path, *, gate_resolvable: tuple[bool, str
             "name": name,
             "path": str(repo_path),
             "ok": False,
-            "checks": [{"check": "repo-exists", "status": FAIL,
-                        "detail": f"registered path does not exist: {repo_path}"}],
+            "checks": [
+                {
+                    "check": "repo-exists",
+                    "status": FAIL,
+                    "detail": f"registered path does not exist: {repo_path}",
+                }
+            ],
         }
 
     gate_ok, gate_detail = _gate_present(repo_path)
@@ -141,9 +151,21 @@ def check_source(name: str, repo_path: Path, *, gate_resolvable: tuple[bool, str
     idx_ok, idx_detail, _ = _index_present(repo_path)
 
     checks = [
-        {"check": "gate-present", "status": PASS if gate_ok else FAIL, "detail": gate_detail},
-        {"check": "gate-resolvable", "status": PASS if res_ok else FAIL, "detail": res_detail},
-        {"check": "index-present", "status": PASS if idx_ok else FAIL, "detail": idx_detail},
+        {
+            "check": "gate-present",
+            "status": PASS if gate_ok else FAIL,
+            "detail": gate_detail,
+        },
+        {
+            "check": "gate-resolvable",
+            "status": PASS if res_ok else FAIL,
+            "detail": res_detail,
+        },
+        {
+            "check": "index-present",
+            "status": PASS if idx_ok else FAIL,
+            "detail": idx_detail,
+        },
     ]
     return {
         "name": name,
@@ -201,8 +223,14 @@ def _template_gate_commands(template: str) -> list[str]:
 
 def _check_template_parses(cmds: list[str]) -> tuple[bool, str]:
     if cmds:
-        return True, f"parsed gate command(s) from LEFTHOOK_YML: {', '.join(sorted(set(cmds)))}"
-    return False, "LEFTHOOK_YML has no `run:` gate command — the adopt template ships no gate"
+        return (
+            True,
+            f"parsed gate command(s) from LEFTHOOK_YML: {', '.join(sorted(set(cmds)))}",
+        )
+    return (
+        False,
+        "LEFTHOOK_YML has no `run:` gate command — the adopt template ships no gate",
+    )
 
 
 def _check_template_resolvable(cmds: list[str], which) -> tuple[bool, str]:
@@ -237,7 +265,10 @@ def _check_template_probe_agree(cmds: list[str]) -> tuple[bool, str]:
     probe_cmd = adopt._GATE_COMMAND
     template_cmds = sorted(set(cmds))
     if not template_cmds:
-        return False, f"probe checks {probe_cmd!r} but the template emits no gate command"
+        return (
+            False,
+            f"probe checks {probe_cmd!r} but the template emits no gate command",
+        )
     if template_cmds != [probe_cmd]:
         return False, (
             f"template emits {template_cmds} but adopt's fail-closed probe checks "
@@ -250,8 +281,14 @@ def _check_no_legacy_names(cmds: list[str]) -> tuple[bool, str]:
     """Item (cheap): no retired command name lingers in the template's gates."""
     found = sorted({c for c in cmds if c in _LEGACY_GATE_NAMES})
     if found:
-        return False, f"legacy gate command name(s) still in LEFTHOOK_YML: {', '.join(found)}"
-    return True, f"no legacy gate command names ({', '.join(_LEGACY_GATE_NAMES)}) in the template"
+        return (
+            False,
+            f"legacy gate command name(s) still in LEFTHOOK_YML: {', '.join(found)}",
+        )
+    return (
+        True,
+        f"no legacy gate command names ({', '.join(_LEGACY_GATE_NAMES)}) in the template",
+    )
 
 
 def run_self_check(*, which=shutil.which) -> dict:

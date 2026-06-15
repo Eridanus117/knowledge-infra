@@ -49,17 +49,24 @@ LIVING_REF = (
 _SRC = str(Path(__file__).resolve().parents[1] / "src")
 
 
-def _git(root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+def _git(
+    root: Path, *args: str, env: dict | None = None
+) -> subprocess.CompletedProcess:
     base = {
-        "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
-        "HOME": str(root), "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+        "HOME": str(root),
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
     }
     if env:
         base.update(env)
     return subprocess.run(
         ["git", "-C", str(root), *args],
-        capture_output=True, text=True, env=base,
+        capture_output=True,
+        text=True,
+        env=base,
     )
 
 
@@ -75,12 +82,15 @@ class _GateRepoCase(unittest.TestCase):
         dom = self.root / "decisions"
         dom.mkdir()
         (dom / "INDEX.md").write_text(
-            "---\ndescription: d\nkeywords: [x]\nkind: index\n---\n# dom\n", encoding="utf-8"
+            "---\ndescription: d\nkeywords: [x]\nkind: index\n---\n# dom\n",
+            encoding="utf-8",
         )
         self.adr = dom / "adr-001-x.md"
         self.adr.write_text(FROZEN_ADR, encoding="utf-8")
         self.adr2 = dom / "adr-002-y.md"
-        self.adr2.write_text(FROZEN_ADR.replace("decided", "also decided"), encoding="utf-8")
+        self.adr2.write_text(
+            FROZEN_ADR.replace("decided", "also decided"), encoding="utf-8"
+        )
         self.living = dom / "living-ref.md"
         self.living.write_text(LIVING_REF, encoding="utf-8")
         _git(self.root, "add", "-A")
@@ -88,12 +98,15 @@ class _GateRepoCase(unittest.TestCase):
 
         # A real pre-commit gate: run the code-under-test's check on staged .md.
         hook = self.root / ".git" / "hooks" / "pre-commit"
-        hook.write_text(textwrap.dedent(f"""\
+        hook.write_text(
+            textwrap.dedent(f"""\
             #!/bin/sh
             files=$(git diff --cached --name-only --diff-filter=ACMR -- '*.md')
             [ -z "$files" ] && exit 0
             PYTHONPATH={_SRC} {sys.executable} -m rhizome.cli check $files
-        """), encoding="utf-8")
+        """),
+            encoding="utf-8",
+        )
         hook.chmod(0o755)
 
     def tearDown(self):
@@ -103,12 +116,16 @@ class _GateRepoCase(unittest.TestCase):
         # run_amend spawns `git commit`; inject deterministic identity + the
         # worktree on PYTHONPATH so the hook resolves the code under test.
         prev = dict(os.environ)
-        os.environ.update({
-            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
-            "HOME": str(self.root),
-            "PYTHONPATH": _SRC,
-        })
+        os.environ.update(
+            {
+                "GIT_AUTHOR_NAME": "t",
+                "GIT_AUTHOR_EMAIL": "t@t",
+                "GIT_COMMITTER_NAME": "t",
+                "GIT_COMMITTER_EMAIL": "t@t",
+                "HOME": str(self.root),
+                "PYTHONPATH": _SRC,
+            }
+        )
         try:
             return amend.run_amend(str(file), reason=reason, cwd=self.root)
         finally:
@@ -128,7 +145,9 @@ class TestAmendHappyPath(_GateRepoCase):
         self.assertIn("amend(frozen): decisions/adr-001-x.md", log)
 
         # working tree is clean for that file (the edit landed in the commit)
-        st = _git(self.root, "status", "--porcelain", "--", "decisions/adr-001-x.md").stdout
+        st = _git(
+            self.root, "status", "--porcelain", "--", "decisions/adr-001-x.md"
+        ).stdout
         self.assertEqual(st.strip(), "")
         committed = _git(self.root, "show", "HEAD:decisions/adr-001-x.md").stdout
         self.assertIn("amended detail", committed)
@@ -139,8 +158,13 @@ class TestAmendHappyPath(_GateRepoCase):
         ledger_text = ledger.read_text(encoding="utf-8")
         self.assertIn("decisions/adr-001-x.md", ledger_text)
         self.assertIn("fix typo in decided clause", ledger_text)
-        tracked = _git(self.root, "ls-files", "--", ".frozen-amend-ledger",
-                       "decisions/.frozen-amend-ledger").stdout
+        tracked = _git(
+            self.root,
+            "ls-files",
+            "--",
+            ".frozen-amend-ledger",
+            "decisions/.frozen-amend-ledger",
+        ).stdout
         self.assertIn(".frozen-amend-ledger", tracked)
 
     def test_amend_works_on_status_frozen_ref(self):
@@ -194,7 +218,9 @@ class TestUnapprovedStillBlocked(_GateRepoCase):
         self.adr.write_text(FROZEN_ADR + "\nsneaky edit\n", encoding="utf-8")
         _git(self.root, "add", "decisions/adr-001-x.md")
         proc = _git(self.root, "commit", "-m", "sneaky")
-        self.assertNotEqual(proc.returncode, 0, "frozen edit must be blocked without approval")
+        self.assertNotEqual(
+            proc.returncode, 0, "frozen edit must be blocked without approval"
+        )
         self.assertIn("frozen document modified", (proc.stdout + proc.stderr))
 
     def test_check_findings_block_without_env(self):
@@ -213,17 +239,22 @@ class TestApprovalIsNarrow(unittest.TestCase):
         dom = self.root / "decisions"
         dom.mkdir()
         (dom / "INDEX.md").write_text(
-            "---\ndescription: d\nkeywords: [x]\nkind: index\n---\n# dom\n", encoding="utf-8"
+            "---\ndescription: d\nkeywords: [x]\nkind: index\n---\n# dom\n",
+            encoding="utf-8",
         )
         self.a = dom / "adr-a.md"
         self.a.write_text(FROZEN_ADR, encoding="utf-8")
         self.b = dom / "adr-b.md"
-        self.b.write_text(FROZEN_ADR.replace("decided", "other decision"), encoding="utf-8")
+        self.b.write_text(
+            FROZEN_ADR.replace("decided", "other decision"), encoding="utf-8"
+        )
         _git(self.root, "add", "-A")
         _git(self.root, "commit", "-q", "-m", "seed")
         self.a.write_text(FROZEN_ADR + "\nedit a\n", encoding="utf-8")
-        self.b.write_text(FROZEN_ADR.replace("decided", "other decision") + "\nedit b\n",
-                          encoding="utf-8")
+        self.b.write_text(
+            FROZEN_ADR.replace("decided", "other decision") + "\nedit b\n",
+            encoding="utf-8",
+        )
         self._prev = dict(os.environ)
 
     def tearDown(self):
@@ -234,28 +265,38 @@ class TestApprovalIsNarrow(unittest.TestCase):
     def test_approved_file_passes_other_frozen_file_still_blocks(self):
         os.environ[check._AMEND_APPROVED_ENV] = str(self.a)
         # the named file is freed
-        self.assertEqual(check.frozen_gate_findings(self.a, self.a.read_text(encoding="utf-8")), [])
+        self.assertEqual(
+            check.frozen_gate_findings(self.a, self.a.read_text(encoding="utf-8")), []
+        )
         # a DIFFERENT frozen file in the same commit is still blocked
-        self.assertTrue(check.has_errors(
-            check.frozen_gate_findings(self.b, self.b.read_text(encoding="utf-8"))
-        ))
+        self.assertTrue(
+            check.has_errors(
+                check.frozen_gate_findings(self.b, self.b.read_text(encoding="utf-8"))
+            )
+        )
 
     def test_unset_env_blocks_everything(self):
         os.environ.pop(check._AMEND_APPROVED_ENV, None)
-        self.assertTrue(check.has_errors(
-            check.frozen_gate_findings(self.a, self.a.read_text(encoding="utf-8"))
-        ))
+        self.assertTrue(
+            check.has_errors(
+                check.frozen_gate_findings(self.a, self.a.read_text(encoding="utf-8"))
+            )
+        )
 
     def test_empty_env_is_not_a_wildcard(self):
         os.environ[check._AMEND_APPROVED_ENV] = ""
-        self.assertTrue(check.has_errors(
-            check.frozen_gate_findings(self.a, self.a.read_text(encoding="utf-8"))
-        ))
+        self.assertTrue(
+            check.has_errors(
+                check.frozen_gate_findings(self.a, self.a.read_text(encoding="utf-8"))
+            )
+        )
 
     def test_match_is_resolved_path_not_string(self):
         # a dotted/relative spelling of the same file still matches by resolve()
         os.environ[check._AMEND_APPROVED_ENV] = str(self.a.parent / "." / self.a.name)
-        self.assertEqual(check.frozen_gate_findings(self.a, self.a.read_text(encoding="utf-8")), [])
+        self.assertEqual(
+            check.frozen_gate_findings(self.a, self.a.read_text(encoding="utf-8")), []
+        )
 
 
 if __name__ == "__main__":

@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import tempfile
-import unittest
-from pathlib import Path
-
 import contextlib
 import io
 import os
+import tempfile
+import unittest
+from pathlib import Path
 
 from rhizome.cli import CliError, _asset_reuse_candidates, main, run_new
 from rhizome.contract import ContractError

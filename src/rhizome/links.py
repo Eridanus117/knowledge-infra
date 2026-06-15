@@ -18,16 +18,16 @@ import os
 from pathlib import Path
 
 from . import contract, sources
-from .check import ERROR, WARN, _WALK_SKIP_DIRS, Finding
+from .check import _WALK_SKIP_DIRS, ERROR, WARN, Finding
 
-# code 解析根: 仓自身 / workspace / workspace 下已知聚合目录（按需扩展）。
-# 公开默认为空(中性); 项目特有的聚合目录名经 env 注入, 有效集合 = 默认 ∪ env。
+# code 解析根: 仓自身 / workspace / workspace 下已知聚合目录(按需扩展)。
+# 公开默认为空(中性); 项目特有的聚合目录名经 env 注入, 有效集合 = 默认 + env。
 _EXTRA_CODE_ROOT_NAMES: tuple[str, ...] = ()
 _CODE_ROOTS_ENV = "RHIZOME_CODE_ROOTS"
 
 
 def _extra_code_root_names() -> tuple[str, ...]:
-    """有效 code 聚合目录名 = 默认 ∪ $RHIZOME_CODE_ROOTS(逗号分隔, 去重去空)。
+    """有效 code 聚合目录名 = 默认 + $RHIZOME_CODE_ROOTS(逗号分隔, 去重去空)。
 
     env 未设 → 纯默认; 空串/多余空格/空项忽略; 保序去重。
     """

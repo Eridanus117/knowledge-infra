@@ -22,7 +22,9 @@ from rhizome.cli import main
 _LEFTHOOK_OK = (
     "pre-commit:\n  commands:\n    kb-check:\n      run: rhizome check {staged_files}\n"
 )
-_INDEX = '---\ndescription: "seed domain"\nkeywords: [seed]\nkind: index\n---\n\n# seed\n'
+_INDEX = (
+    '---\ndescription: "seed domain"\nkeywords: [seed]\nkind: index\n---\n\n# seed\n'
+)
 
 
 def _which(name):  # both lefthook and rhizome "found"
@@ -35,7 +37,9 @@ def _which_no_rhizome(name):
 
 class TestDoctor(unittest.TestCase):
     def setUp(self):
-        self._env = {k: os.environ.pop(k, None) for k in ("KB_SOURCES", "KB_WORKSPACE_ROOT")}
+        self._env = {
+            k: os.environ.pop(k, None) for k in ("KB_SOURCES", "KB_WORKSPACE_ROOT")
+        }
 
     def tearDown(self):
         for k, v in self._env.items():
@@ -60,8 +64,15 @@ class TestDoctor(unittest.TestCase):
             text += f'path = "{repo}"\n'
         reg.write_text(text, encoding="utf-8")
 
-    def _repo(self, parent: Path, name: str, *, gate: str | None = _LEFTHOOK_OK,
-              precommit: str | None = None, domain: str | None = "docs") -> Path:
+    def _repo(
+        self,
+        parent: Path,
+        name: str,
+        *,
+        gate: str | None = _LEFTHOOK_OK,
+        precommit: str | None = None,
+        domain: str | None = "docs",
+    ) -> Path:
         """Build a repo with optional gate file(s) and a docs/INDEX.md domain."""
         repo = parent / name
         repo.mkdir(parents=True)
@@ -95,13 +106,19 @@ class TestDoctor(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             ws, reg = self._ws(tmp)
             self._repo(
-                ws, "alpha", gate=None,
+                ws,
+                "alpha",
+                gate=None,
                 precommit="repos:\n  - repo: local\n    hooks:\n      - entry: rhizome check\n",
             )
             self._source(reg, "alpha")
             report = doctor.run_doctor(registry=reg, which=_which)
             self.assertTrue(report["ok"])
-            gate = next(c for c in report["sources"][0]["checks"] if c["check"] == "gate-present")
+            gate = next(
+                c
+                for c in report["sources"][0]["checks"]
+                if c["check"] == "gate-present"
+            )
             self.assertEqual(gate["status"], doctor.PASS)
             self.assertIn(".pre-commit-config.yaml", gate["detail"])
 
@@ -110,11 +127,18 @@ class TestDoctor(unittest.TestCase):
         # agree (otherwise it would flag every not-yet-migrated repo as gateless).
         with tempfile.TemporaryDirectory() as tmp:
             ws, reg = self._ws(tmp)
-            self._repo(ws, "alpha",
-                       gate="pre-commit:\n  commands:\n    kb-check:\n      run: kb check\n")
+            self._repo(
+                ws,
+                "alpha",
+                gate="pre-commit:\n  commands:\n    kb-check:\n      run: kb check\n",
+            )
             self._source(reg, "alpha")
             report = doctor.run_doctor(registry=reg, which=_which)
-            gate = next(c for c in report["sources"][0]["checks"] if c["check"] == "gate-present")
+            gate = next(
+                c
+                for c in report["sources"][0]["checks"]
+                if c["check"] == "gate-present"
+            )
             self.assertEqual(gate["status"], doctor.PASS)
 
     # ---- failure modes (each must name a diagnostic reason) -----------------
@@ -126,7 +150,11 @@ class TestDoctor(unittest.TestCase):
             self._source(reg, "alpha")
             report = doctor.run_doctor(registry=reg, which=_which)
             self.assertFalse(report["ok"])
-            gate = next(c for c in report["sources"][0]["checks"] if c["check"] == "gate-present")
+            gate = next(
+                c
+                for c in report["sources"][0]["checks"]
+                if c["check"] == "gate-present"
+            )
             self.assertEqual(gate["status"], doctor.FAIL)
             self.assertIn("no KB commit gate", gate["detail"])
             self.assertIn("lefthook.yml (absent)", gate["detail"])
@@ -134,10 +162,16 @@ class TestDoctor(unittest.TestCase):
     def test_commented_gate_is_not_enough(self):
         with tempfile.TemporaryDirectory() as tmp:
             ws, reg = self._ws(tmp)
-            self._repo(ws, "alpha", gate="# rhizome check lives here someday\npre-commit:\n")
+            self._repo(
+                ws, "alpha", gate="# rhizome check lives here someday\npre-commit:\n"
+            )
             self._source(reg, "alpha")
             report = doctor.run_doctor(registry=reg, which=_which)
-            gate = next(c for c in report["sources"][0]["checks"] if c["check"] == "gate-present")
+            gate = next(
+                c
+                for c in report["sources"][0]["checks"]
+                if c["check"] == "gate-present"
+            )
             self.assertEqual(gate["status"], doctor.FAIL)
             self.assertIn("no `rhizome check` command", gate["detail"])
 
@@ -166,7 +200,11 @@ class TestDoctor(unittest.TestCase):
             self._source(reg, "alpha")
             report = doctor.run_doctor(registry=reg, which=_which)
             self.assertFalse(report["ok"])
-            idx = next(c for c in report["sources"][0]["checks"] if c["check"] == "index-present")
+            idx = next(
+                c
+                for c in report["sources"][0]["checks"]
+                if c["check"] == "index-present"
+            )
             self.assertEqual(idx["status"], doctor.FAIL)
             self.assertIn("no INDEX.md domain found", idx["detail"])
 
@@ -202,7 +240,10 @@ class TestDoctor(unittest.TestCase):
             self._source(reg, "bad")
             os.environ["KB_SOURCES"] = str(reg)
             err = io.StringIO()
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(err),
+            ):
                 rc = main(["doctor", "--sources"])
             self.assertEqual(rc, 1)
             self.assertIn("FAIL", err.getvalue())
@@ -213,7 +254,10 @@ class TestDoctor(unittest.TestCase):
             self._repo(ws, "alpha")
             self._source(reg, "alpha")
             os.environ["KB_SOURCES"] = str(reg)
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
                 rc = main(["doctor", "--sources"])
             self.assertEqual(rc, 0)
 
@@ -230,8 +274,10 @@ class TestDoctor(unittest.TestCase):
             report = json.loads(out.getvalue())
             self.assertTrue(report["ok"])
             self.assertEqual([r["name"] for r in report["sources"]], ["alpha"])
-            self.assertEqual({c["check"] for c in report["sources"][0]["checks"]},
-                             {"gate-present", "gate-resolvable", "index-present"})
+            self.assertEqual(
+                {c["check"] for c in report["sources"][0]["checks"]},
+                {"gate-present", "gate-resolvable", "index-present"},
+            )
             self.assertIn("gate_resolvable", report)
 
     def test_cli_requires_sources_flag(self):
@@ -278,10 +324,15 @@ class TestDoctorSelf(unittest.TestCase):
         self.assertTrue(report["ok"])
         self.assertEqual({c["status"] for c in report["checks"]}, {doctor.PASS})
         names = {c["check"] for c in report["checks"]}
-        self.assertEqual(names, {
-            "template-parses", "template-resolvable",
-            "template-probe-agree", "no-legacy-names",
-        })
+        self.assertEqual(
+            names,
+            {
+                "template-parses",
+                "template-resolvable",
+                "template-probe-agree",
+                "no-legacy-names",
+            },
+        )
 
     def test_self_detail_names_parsed_command(self):
         report = doctor.run_self_check(which=_which)
@@ -307,7 +358,9 @@ class TestDoctorSelf(unittest.TestCase):
         self.assertIn("127", res["detail"])
         # The same broken template also trips the probe-agreement + legacy-name
         # checks, so it FAILs even if the dead command happened to stay on PATH.
-        agree = next(c for c in report["checks"] if c["check"] == "template-probe-agree")
+        agree = next(
+            c for c in report["checks"] if c["check"] == "template-probe-agree"
+        )
         legacy = next(c for c in report["checks"] if c["check"] == "no-legacy-names")
         self.assertEqual(agree["status"], doctor.FAIL)
         self.assertEqual(legacy["status"], doctor.FAIL)
@@ -324,16 +377,22 @@ class TestDoctorSelf(unittest.TestCase):
     def test_template_probe_disagree_fails(self):
         # Half-done rename: template updated to a new name, probe constant not.
         # Even though the new command resolves, template ⇔ probe must agree.
-        adopt.LEFTHOOK_YML = self._orig_template.replace("rhizome check", "rhizome2 check")
+        adopt.LEFTHOOK_YML = self._orig_template.replace(
+            "rhizome check", "rhizome2 check"
+        )
         report = doctor.run_self_check(which=_which)  # everything "resolves"
         self.assertFalse(report["ok"])
-        agree = next(c for c in report["checks"] if c["check"] == "template-probe-agree")
+        agree = next(
+            c for c in report["checks"] if c["check"] == "template-probe-agree"
+        )
         self.assertEqual(agree["status"], doctor.FAIL)
         self.assertIn("disagree", agree["detail"])
 
     def test_legacy_name_in_template_fails(self):
         adopt.LEFTHOOK_YML = self._orig_template.replace("rhizome check", "kb check")
-        report = doctor.run_self_check(which=_which)  # kb "resolves" so isolate this check
+        report = doctor.run_self_check(
+            which=_which
+        )  # kb "resolves" so isolate this check
         legacy = next(c for c in report["checks"] if c["check"] == "no-legacy-names")
         self.assertEqual(legacy["status"], doctor.FAIL)
         self.assertIn("kb", legacy["detail"])
@@ -348,7 +407,10 @@ class TestDoctorSelf(unittest.TestCase):
     # ---- CLI wiring ---------------------------------------------------------
 
     def test_cli_self_exit_zero_in_fixed_state(self):
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        with (
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
             rc = main(["doctor", "--self"])
         self.assertEqual(rc, 0)
 
@@ -372,7 +434,12 @@ class TestDoctorSelf(unittest.TestCase):
         self.assertTrue(report["ok"])
         self.assertEqual(
             {c["check"] for c in report["checks"]},
-            {"template-parses", "template-resolvable", "template-probe-agree", "no-legacy-names"},
+            {
+                "template-parses",
+                "template-resolvable",
+                "template-probe-agree",
+                "no-legacy-names",
+            },
         )
 
     def test_cli_all_runs_both_modes(self):
@@ -387,11 +454,16 @@ class TestDoctorSelf(unittest.TestCase):
             d = repo / "docs"
             d.mkdir()
             (d / "INDEX.md").write_text(_INDEX, encoding="utf-8")
-            reg.write_text(reg.read_text() + '\n[[source]]\nname = "alpha"\n', encoding="utf-8")
+            reg.write_text(
+                reg.read_text() + '\n[[source]]\nname = "alpha"\n', encoding="utf-8"
+            )
             os.environ["KB_SOURCES"] = str(reg)
             try:
                 out = io.StringIO()
-                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                with (
+                    contextlib.redirect_stdout(out),
+                    contextlib.redirect_stderr(io.StringIO()),
+                ):
                     rc = main(["doctor", "--all", "--json"])
                 self.assertEqual(rc, 0)
                 payload = json.loads(out.getvalue())

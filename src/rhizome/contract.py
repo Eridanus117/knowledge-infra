@@ -90,7 +90,7 @@ ASSET_PREFIXES: tuple[str, ...] = (
 )
 # Project-specific asset namespaces (e.g. internal middleware names) are kept
 # out of the public default set and injected at runtime via a comma-separated
-# env var; the effective set is always default ∪ env (additive, never replace).
+# env var; the effective set is always default + env (additive, never replace).
 ASSET_PREFIXES_ENV = "RHIZOME_ASSET_PREFIXES"
 
 
@@ -106,7 +106,7 @@ def _env_csv(name: str) -> list[str]:
 
 
 def known_asset_prefixes() -> frozenset[str]:
-    """Effective canonical asset prefixes = public defaults ∪ $RHIZOME_ASSET_PREFIXES.
+    """Effective canonical asset prefixes = public defaults + $RHIZOME_ASSET_PREFIXES.
 
     Env-supplied prefixes are lowercased to match asset_prefix() normalization.
     """

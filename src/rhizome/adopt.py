@@ -162,7 +162,7 @@ def _append_source(reg: Path, name: str, repo_root: Path, ws_literal: Path) -> N
     try:
         names = {n for n, _ in sources.load_sources(reg)}
     except sources.SourcesError as exc:
-        raise AdoptError(f"registry self-check failed after append: {exc}")
+        raise AdoptError(f"registry self-check failed after append: {exc}") from exc
     if name not in names:
         raise AdoptError(f"registry self-check failed: {name!r} missing after append")
 
@@ -305,7 +305,7 @@ def run_adopt(
     try:
         data = tomllib.loads(reg.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise AdoptUsageError(f"{reg}: {exc}")
+        raise AdoptUsageError(f"{reg}: {exc}") from exc
     # The literal workspace_root decides whether a `path =` line is needed.
     # Deliberately NOT the KB_WORKSPACE_ROOT env override: the other registry
     # consumers (<service-manager> indexer, surface-hook) run without this process's env,

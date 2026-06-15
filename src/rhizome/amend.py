@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import check, contract
@@ -50,10 +50,15 @@ class AmendUsageError(AmendError):
     """Bad arguments / environment (no file, no repo, empty reason) → exit 2."""
 
 
-def _git(repo_root: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+def _git(
+    repo_root: Path, *args: str, env: dict | None = None
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["git", "-C", str(repo_root), *args],
-        capture_output=True, text=True, timeout=30, env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
     )
 
 
@@ -75,18 +80,22 @@ def run_amend(file_arg: str, *, reason: str, cwd: Path | None = None) -> dict:
 
     reason = reason.strip()
     if not reason:
-        raise AmendUsageError("a non-empty -m/--reason is required (it is the audit record)")
+        raise AmendUsageError(
+            "a non-empty -m/--reason is required (it is the audit record)"
+        )
 
     path = Path(file_arg).expanduser()
     if not path.is_absolute():
-        path = (cwd / path)
+        path = cwd / path
     path = path.resolve()
     if not path.is_file():
         raise AmendUsageError(f"no such file: {path}")
 
     repo_root = contract.find_repo_root(path.parent)
     if repo_root is None:
-        raise AmendUsageError(f"not inside a git repo (no .git found from {path.parent})")
+        raise AmendUsageError(
+            f"not inside a git repo (no .git found from {path.parent})"
+        )
     repo_root = repo_root.resolve()
 
     if not contract.is_note_location(path):
@@ -105,8 +114,8 @@ def run_amend(file_arg: str, *, reason: str, cwd: Path | None = None) -> dict:
 
     try:
         rel = path.relative_to(repo_root).as_posix()
-    except ValueError:
-        raise AmendError(f"{path} is not under repo root {repo_root}")
+    except ValueError as exc:
+        raise AmendError(f"{path} is not under repo root {repo_root}") from exc
 
     if not _working_tree_differs(repo_root, rel):
         raise AmendError(f"{rel} has no changes vs HEAD — nothing to amend")
@@ -159,7 +168,7 @@ def _append_ledger(repo_root: Path, rel: str, reason: str) -> Path:
     decisions = repo_root / "decisions"
     ledger_dir = decisions if decisions.is_dir() else repo_root
     ledger = ledger_dir / LEDGER_NAME
-    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    ts = datetime.now(UTC).isoformat(timespec="seconds")
     one_line_reason = " ".join(reason.split())
     line = f"{ts}\t{rel}\t{one_line_reason}\n"
     with ledger.open("a", encoding="utf-8") as fh:

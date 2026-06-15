@@ -52,7 +52,7 @@ _FENCE_START_RE = re.compile(r"^\s*([`~]{3,})\s*([A-Za-z0-9_-]+)?\b.*$")
 
 
 class Finding:
-    __slots__ = ("severity", "field", "message")
+    __slots__ = ("field", "message", "severity")
 
     def __init__(self, severity: str, field: str | None, message: str):
         self.severity = severity

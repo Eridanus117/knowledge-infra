@@ -63,9 +63,11 @@ class TestRegistry(unittest.TestCase):
             self.assertEqual(got[0][1], base / "my-kb")
 
     def test_missing_registry_raises(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(sources.SourcesError):
-                sources.load_sources(Path(tmp) / "nope.toml")
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            self.assertRaises(sources.SourcesError),
+        ):
+            sources.load_sources(Path(tmp) / "nope.toml")
 
 
 class TestDiscovery(unittest.TestCase):
