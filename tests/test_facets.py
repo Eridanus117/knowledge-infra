@@ -3,7 +3,7 @@ from memex.facets import Facets
 
 DOC = Doc(
     object_key="myrepo:decisions/adr-004.md",
-    title="ADR-004",
+    title="DOC-004",
     body="中央 collection",
     path="decisions/adr-004.md",
     kind="decision",
