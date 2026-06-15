@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from kb import check, links
+from rhizome import check, links
 
 
 def _mkrepo(root: Path) -> Path:

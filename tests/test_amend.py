@@ -6,7 +6,7 @@ content errors; and the approval marker is narrow — it frees only the one name
 file and leaves every other frozen doc still gated.
 
 The integration cases use a real git repo whose pre-commit hook runs the
-WORKTREE's `kb.cli check` (via PYTHONPATH), so the env-inheritance path through
+WORKTREE's `rhizome.cli check` (via PYTHONPATH), so the env-inheritance path through
 `git commit` → hook → `rhizome check` is exercised against the code under test,
 not whatever `rhizome` happens to be installed on PATH.
 """
@@ -21,7 +21,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
-from kb import amend, check
+from rhizome import amend, check
 
 FROZEN_ADR = (
     "---\n"
@@ -65,7 +65,7 @@ def _git(root: Path, *args: str, env: dict | None = None) -> subprocess.Complete
 
 class _GateRepoCase(unittest.TestCase):
     """A real git repo with a decisions/ domain, committed docs, and a live
-    pre-commit gate that runs the worktree's `kb.cli check` on staged files."""
+    pre-commit gate that runs the worktree's `rhizome.cli check` on staged files."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -92,7 +92,7 @@ class _GateRepoCase(unittest.TestCase):
             #!/bin/sh
             files=$(git diff --cached --name-only --diff-filter=ACMR -- '*.md')
             [ -z "$files" ] && exit 0
-            PYTHONPATH={_SRC} {sys.executable} -m kb.cli check $files
+            PYTHONPATH={_SRC} {sys.executable} -m rhizome.cli check $files
         """), encoding="utf-8")
         hook.chmod(0o755)
 

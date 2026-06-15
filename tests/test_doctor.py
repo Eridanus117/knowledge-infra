@@ -16,8 +16,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from kb import doctor
-from kb.cli import main
+from rhizome import doctor
+from rhizome.cli import main
 
 _LEFTHOOK_OK = (
     "pre-commit:\n  commands:\n    kb-check:\n      run: rhizome check {staged_files}\n"
@@ -251,7 +251,7 @@ class TestDoctor(unittest.TestCase):
             self.assertIn("missing file", err.getvalue())
 
 
-from kb import adopt  # noqa: E402
+from rhizome import adopt  # noqa: E402
 
 
 class TestDoctorSelf(unittest.TestCase):

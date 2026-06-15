@@ -37,7 +37,7 @@ _GATE_COMMAND = "rhizome"
 # Per-file contract check plus the repo-level duplicate-domain and frozen
 # delete/rename guards.
 LEFTHOOK_YML = """\
-# lefthook.yml — local git hooks for this KB source repo (written by kb adopt).
+# lefthook.yml — local git hooks for this KB source repo (written by rhizome adopt).
 # Install: lefthook install (one-time, per clone/worktree).
 # rhizome check is domain-aware: it only validates changed Markdown inside
 # a KB domain (a dir with an INDEX.md ancestor); source code and scratch docs
@@ -94,7 +94,7 @@ def _reject_worktree(repo_root: Path) -> None:
     if (repo_root / ".git").is_file():
         raise AdoptUsageError(
             f"{repo_root} is a linked worktree or submodule (.git is a file); "
-            "run kb adopt from the main checkout"
+            "run rhizome adopt from the main checkout"
         )
 
 
@@ -197,16 +197,16 @@ def _write_index(
     docs.mkdir(exist_ok=True)
     dest = docs / contract.INDEX_FILENAME
     if dest.exists():
-        raise AdoptError(f"{dest} already exists (kb does not overwrite)")
+        raise AdoptError(f"{dest} already exists (rhizome does not overwrite)")
     fm = contract.render_frontmatter(
         description=description, keywords=keywords, kind="index"
     )
-    body = f"# {name} docs\n\n{description}\n\n当前入口:暂无;用 `kb new` 在本域落第一篇文档。"
+    body = f"# {name} docs\n\n{description}\n\n当前入口:暂无;用 `rhizome new` 在本域落第一篇文档。"
     dest.write_text(contract.render_note(fm, body), encoding="utf-8")
     findings = check.check_path(dest)
     if check.has_errors(findings):
         msgs = "; ".join(f.message for f in findings if f.severity == check.ERROR)
-        raise AdoptError(f"INDEX skeleton failed kb check: {dest}: {msgs}")
+        raise AdoptError(f"INDEX skeleton failed rhizome check: {dest}: {msgs}")
     return dest
 
 
@@ -273,7 +273,7 @@ def _lefthook_state(repo_root: Path, runner, which) -> dict:
 
 
 def count_stray_md(repo_root: Path) -> int:
-    """Markdown files outside any domain — kb does not index them (FYI only)."""
+    """Markdown files outside any domain — rhizome does not index them (FYI only)."""
     n = 0
     for p in repo_root.rglob("*.md"):
         if not sources._SKIP_DIRS.isdisjoint(p.parts):
@@ -381,7 +381,7 @@ def run_adopt(
             {
                 "step": "index",
                 "status": CHANGED,
-                "detail": f"wrote {dest.relative_to(repo_root)} (domain: docs), kb check ok",
+                "detail": f"wrote {dest.relative_to(repo_root)} (domain: docs), rhizome check ok",
             }
         )
     else:
@@ -403,7 +403,7 @@ def run_adopt(
             {
                 "step": "lefthook",
                 "status": OK,
-                "detail": "gate already wired via pre-commit framework (.pre-commit-config.yaml runs kb check)",
+                "detail": "gate already wired via pre-commit framework (.pre-commit-config.yaml runs rhizome check)",
             }
         )
         return _result(reg, repo_root, name, steps, warnings)
@@ -412,7 +412,7 @@ def run_adopt(
         wrote_yml = True
     elif not lh["yml_has_kb_check"]:
         warnings.append(
-            "existing lefthook.yml has no `kb check` command — left untouched, add the gate manually"
+            "existing lefthook.yml has no `rhizome check` command — left untouched, add the gate manually"
         )
 
     if lh["hooks_path"]:

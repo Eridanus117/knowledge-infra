@@ -17,8 +17,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from kb import contract, sources
-from kb.check import ERROR, WARN, _WALK_SKIP_DIRS, Finding
+from . import contract, sources
+from .check import ERROR, WARN, _WALK_SKIP_DIRS, Finding
 
 # code 解析根: 仓自身 / workspace / workspace 下已知聚合目录（按需扩展）。
 # 公开默认为空(中性); 项目特有的聚合目录名经 env 注入, 有效集合 = 默认 ∪ env。

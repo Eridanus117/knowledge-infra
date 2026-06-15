@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import unittest
 
-from kb import contract
-from kb.contract import ContractError
+from rhizome import contract
+from rhizome.contract import ContractError
 
 
 class TestSplit(unittest.TestCase):

@@ -13,8 +13,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from kb.adopt import AdoptError, AdoptUsageError, run_adopt
-from kb.cli import main
+from rhizome.adopt import AdoptError, AdoptUsageError, run_adopt
+from rhizome.cli import main
 
 
 class _Runner:
@@ -297,7 +297,7 @@ class TestAdopt(unittest.TestCase):
             (repo / "lefthook.yml").write_text(custom)
             res, runner = self._adopt("proj", reg)
             self.assertEqual((repo / "lefthook.yml").read_text(), custom)
-            self.assertTrue(any("no `kb check`" in w for w in res["warnings"]))
+            self.assertTrue(any("no `rhizome check`" in w for w in res["warnings"]))
             self.assertEqual(len(runner.install_calls), 1)  # still converges the hook
 
     def test_commented_kb_check_is_not_enough(self):
@@ -308,7 +308,7 @@ class TestAdopt(unittest.TestCase):
                 "# kb check lives here someday\npre-commit:\n"
             )
             res, _ = self._adopt("proj", reg)
-            self.assertTrue(any("no `kb check`" in w for w in res["warnings"]))
+            self.assertTrue(any("no `rhizome check`" in w for w in res["warnings"]))
 
     def test_precommit_framework_gate_counts_as_converged(self):
         # Live case: the kb gate wired through .pre-commit-config.yaml.

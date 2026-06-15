@@ -10,8 +10,8 @@ import contextlib
 import io
 import os
 
-from kb.cli import CliError, _asset_reuse_candidates, main, run_new
-from kb.contract import ContractError
+from rhizome.cli import CliError, _asset_reuse_candidates, main, run_new
+from rhizome.contract import ContractError
 
 
 class TestRunNew(unittest.TestCase):

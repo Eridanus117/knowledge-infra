@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from kb import sources
+from rhizome import sources
 
 
 def _repo(base: Path, name: str) -> Path:

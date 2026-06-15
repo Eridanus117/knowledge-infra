@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from kb import check, contract
+from rhizome import check, contract
 
 
 def _errs(findings):

@@ -231,7 +231,7 @@ def check_path(path: Path) -> list[Finding]:
         return [Finding(ERROR, None, f"unreadable: {exc}")]
     if not contract.is_note_location(path):
         return []  # outside any KB domain → not a note (e.g. PM issues/) → skip
-    from kb import links  # 延迟 import: links 反向依赖本模块的 Finding
+    from . import links  # 延迟 import: links 反向依赖本模块的 Finding
 
     return (
         check_text(text)

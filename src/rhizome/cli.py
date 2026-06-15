@@ -97,7 +97,7 @@ def run_new(
 
     dest = domain_dir / f"{topic}.md"
     if dest.exists():
-        raise CliError(f"note already exists: {dest} (kb does not overwrite)")
+        raise CliError(f"note already exists: {dest} (rhizome does not overwrite)")
 
     fm = contract.render_frontmatter(
         description=description,
