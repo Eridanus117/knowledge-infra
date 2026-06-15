@@ -79,7 +79,7 @@ STATUS_ALLOWED = frozenset({"frozen"})
 # as decision-conditional, not flat-killed.
 DECISION_ONLY_FIELDS = frozenset({"supersedes", "assets"})
 ASSET_PREFIXES: tuple[str, ...] = (
-    # Common delivery/runtime asset namespaces — extend for your project.
+    # Common delivery/runtime asset namespaces — neutral public defaults.
     "repo",
     "img",
     "data",
@@ -88,6 +88,31 @@ ASSET_PREFIXES: tuple[str, ...] = (
     "log",
     "svc",
 )
+# Project-specific asset namespaces (e.g. internal middleware names) are kept
+# out of the public default set and injected at runtime via a comma-separated
+# env var; the effective set is always default + env (additive, never replace).
+ASSET_PREFIXES_ENV = "RHIZOME_ASSET_PREFIXES"
+
+
+def _env_csv(name: str) -> list[str]:
+    """Comma-separated env var → cleaned list (empty/whitespace items dropped).
+
+    Unset env → []. Robust to extra spaces, trailing commas, blank items.
+    """
+    raw = os.environ.get(name)
+    if not raw:
+        return []
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def known_asset_prefixes() -> frozenset[str]:
+    """Effective canonical asset prefixes = public defaults + $RHIZOME_ASSET_PREFIXES.
+
+    Env-supplied prefixes are lowercased to match asset_prefix() normalization.
+    """
+    return frozenset(ASSET_PREFIXES) | {p.lower() for p in _env_csv(ASSET_PREFIXES_ENV)}
+
+
 ASSET_EXTERNALIZE_COUNT_THRESHOLD = 12
 ASSET_EXTERNALIZE_REUSE_THRESHOLD = 3
 # Reconstructed elsewhere, so also never hand-written into frontmatter:

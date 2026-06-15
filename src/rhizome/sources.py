@@ -243,7 +243,7 @@ def build_tree(registry: Path | None = None) -> list[dict]:
 def diff(
     registry: Path | None = None, central: dict[str, dict[str, str]] | None = None
 ) -> list[dict]:
-    """Completeness: discovered domains × actually-indexed in the central
+    """Completeness: discovered domains vs actually-indexed in the central
     collection.
 
     Per repo reports: missing repo, 0 domains, not-yet-indexed (absent from the
@@ -283,7 +283,7 @@ def diff(
         # A domain is covered if any indexed note resolves to it OR to a
         # path-segment descendant (domain scope is a prefix filter).
         # `d + "/"` keeps it segment-aware: `foo` ≠ `foo-private`.
-        def _covered(d: str) -> bool:
+        def _covered(d: str, indexed_set: set[str] = indexed_set) -> bool:
             return any(k == d or k.startswith(d + "/") for k in indexed_set)
 
         row["domains_indexed"] = sum(1 for d in discovered if _covered(d))

@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from kb import check, cli, contract
+from rhizome import check, cli, contract
 
 
 def _fields(findings, severity):

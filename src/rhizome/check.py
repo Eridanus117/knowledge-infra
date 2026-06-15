@@ -23,9 +23,11 @@ isn't" case is the indexer's loud-skip job, complementary to this.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from . import contract
@@ -34,6 +36,15 @@ from .contract import ContractError
 ERROR = "error"
 WARN = "warn"
 
+# Narrow, single-file frozen-amend approval channel.
+# `rhizome amend` sets this env var to ONE absolute file path before spawning the
+# real `git commit`; lefthook inherits the env and runs `rhizome check`, which
+# then drops ONLY that file's frozen-modification block (logging the approved
+# amend) while every other check — including frozen blocks on every other file —
+# still fires. Deliberately one path, never a list or wildcard: a provenance
+# channel for one approved edit, not a reusable escape hatch.
+_AMEND_APPROVED_ENV = "RHIZOME_AMEND_APPROVED"
+
 # Directories that never hold KB content (mirrors sources._SKIP_DIRS); the
 # repo-level INDEX.md walk skips these plus any hidden dir (.git/.venv/...).
 _WALK_SKIP_DIRS = frozenset({".git", ".venv", "__pycache__", "node_modules", "dist"})
@@ -41,7 +52,7 @@ _FENCE_START_RE = re.compile(r"^\s*([`~]{3,})\s*([A-Za-z0-9_-]+)?\b.*$")
 
 
 class Finding:
-    __slots__ = ("severity", "field", "message")
+    __slots__ = ("field", "message", "severity")
 
     def __init__(self, severity: str, field: str | None, message: str):
         self.severity = severity
@@ -156,13 +167,14 @@ def check_text(text: str) -> list[Finding]:
                         )
                     )
                     continue
+                known = contract.known_asset_prefixes()
                 prefix = contract.asset_prefix(asset)
-                if prefix not in contract.ASSET_PREFIXES:
+                if prefix not in known:
                     findings.append(
                         Finding(
                             WARN,
                             "assets",
-                            f"unknown asset prefix in {asset!r}; canonical prefixes: {list(contract.ASSET_PREFIXES)}",
+                            f"unknown asset prefix in {asset!r}; canonical prefixes: {sorted(known)}",
                         )
                     )
             for asset in sorted(set(clean_assets) - body_assets):
@@ -219,7 +231,7 @@ def check_path(path: Path) -> list[Finding]:
         return [Finding(ERROR, None, f"unreadable: {exc}")]
     if not contract.is_note_location(path):
         return []  # outside any KB domain → not a note (e.g. PM issues/) → skip
-    from kb import links  # 延迟 import: links 反向依赖本模块的 Finding
+    from . import links  # 延迟 import: links 反向依赖本模块的 Finding
 
     return (
         check_text(text)
@@ -276,17 +288,47 @@ def head_frozen(path: Path) -> bool:
     return _head_frozen_text(path) is not None
 
 
+def _amend_approved_for(path: Path) -> bool:
+    """True iff `path` is the single file named by RHIZOME_AMEND_APPROVED.
+
+    The env var holds exactly one absolute path; the match is by resolved path
+    so it cannot be tricked by `.`/`..`/symlink spelling. An unset/empty var
+    means no approval (the normal commit path), so the frozen guard fires.
+    """
+    approved = os.environ.get(_AMEND_APPROVED_ENV)
+    if not approved:
+        return False
+    try:
+        return Path(approved).resolve() == path.resolve()
+    except OSError:
+        return False
+
+
 def frozen_gate_findings(path: Path, text: str) -> list[Finding]:
-    """ERROR if `path` diverges from a frozen HEAD version. New files pass."""
+    """ERROR if `path` diverges from a frozen HEAD version. New files pass.
+
+    Exactly one narrow exception: the file named by RHIZOME_AMEND_APPROVED gets
+    a logged, approved bypass of THIS block (via `rhizome amend`).
+    The bypass is provenance, not a gate relaxation — it covers only the frozen
+    block for the one named file; all other findings (frontmatter, Mermaid,
+    links) on this file and the frozen block on every other file are untouched.
+    """
     head = _head_frozen_text(path)
     if head is None or head == text:
+        return []
+    if _amend_approved_for(path):
+        # Loud, single-line, greppable audit trail in the hook output; the
+        # durable record is the commit's Frozen-Amend-Approved trailer.
+        print(f"rhizome check: approved amend: {path}", file=sys.stderr)
         return []
     return [
         Finding(
             ERROR,
             None,
             "frozen document modified — HEAD version is a read-only snapshot "
-            "(status: frozen / kind: decision); supersede with a new doc instead",
+            "(status: frozen / kind: decision); supersede with a new doc instead; "
+            "bypass requires maintainer approval "
+            "(audited amend: `rhizome amend <file> -m <reason>`)",
         )
     ]
 
@@ -568,6 +610,6 @@ def body_asset_ids(text: str) -> set[str]:
         cells = line.split("|") if "|" in line else [line]
         for cell in cells:
             candidate = cell.strip().strip("`").strip()
-            if contract.asset_prefix(candidate) in contract.ASSET_PREFIXES:
+            if contract.asset_prefix(candidate) in contract.known_asset_prefixes():
                 assets.add(candidate)
     return assets

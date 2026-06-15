@@ -26,10 +26,18 @@ SKIPPED = "skipped"
 
 _DEFAULT_WORKSPACE_ROOT = "~/workspace"
 
+# The single source of truth for the gate command name. The lefthook template
+# below invokes `<_GATE_COMMAND> check ...`, and the fail-closed PATH probe in
+# _lefthook_state checks `which(_GATE_COMMAND)`. Keeping both on this one
+# constant is what makes them rename-safe TOGETHER: a future rename that misses
+# one place writes a broken hook, and `rhizome doctor --self` asserts the
+# template's command == this constant == on PATH.
+_GATE_COMMAND = "rhizome"
+
 # Per-file contract check plus the repo-level duplicate-domain and frozen
 # delete/rename guards.
 LEFTHOOK_YML = """\
-# lefthook.yml — local git hooks for this KB source repo (written by kb adopt).
+# lefthook.yml — local git hooks for this KB source repo (written by rhizome adopt).
 # Install: lefthook install (one-time, per clone/worktree).
 # rhizome check is domain-aware: it only validates changed Markdown inside
 # a KB domain (a dir with an INDEX.md ancestor); source code and scratch docs
@@ -86,7 +94,7 @@ def _reject_worktree(repo_root: Path) -> None:
     if (repo_root / ".git").is_file():
         raise AdoptUsageError(
             f"{repo_root} is a linked worktree or submodule (.git is a file); "
-            "run kb adopt from the main checkout"
+            "run rhizome adopt from the main checkout"
         )
 
 
@@ -154,7 +162,7 @@ def _append_source(reg: Path, name: str, repo_root: Path, ws_literal: Path) -> N
     try:
         names = {n for n, _ in sources.load_sources(reg)}
     except sources.SourcesError as exc:
-        raise AdoptError(f"registry self-check failed after append: {exc}")
+        raise AdoptError(f"registry self-check failed after append: {exc}") from exc
     if name not in names:
         raise AdoptError(f"registry self-check failed: {name!r} missing after append")
 
@@ -189,16 +197,16 @@ def _write_index(
     docs.mkdir(exist_ok=True)
     dest = docs / contract.INDEX_FILENAME
     if dest.exists():
-        raise AdoptError(f"{dest} already exists (kb does not overwrite)")
+        raise AdoptError(f"{dest} already exists (rhizome does not overwrite)")
     fm = contract.render_frontmatter(
         description=description, keywords=keywords, kind="index"
     )
-    body = f"# {name} docs\n\n{description}\n\n当前入口:暂无;用 `kb new` 在本域落第一篇文档。"
+    body = f"# {name} docs\n\n{description}\n\n当前入口:暂无;用 `rhizome new` 在本域落第一篇文档。"
     dest.write_text(contract.render_note(fm, body), encoding="utf-8")
     findings = check.check_path(dest)
     if check.has_errors(findings):
         msgs = "; ".join(f.message for f in findings if f.severity == check.ERROR)
-        raise AdoptError(f"INDEX skeleton failed kb check: {dest}: {msgs}")
+        raise AdoptError(f"INDEX skeleton failed rhizome check: {dest}: {msgs}")
     return dest
 
 
@@ -208,7 +216,10 @@ def _write_index(
 def _lefthook_state(repo_root: Path, runner, which) -> dict:
     state: dict = {
         "binary": which("lefthook"),
-        "kb_on_path": which("rhizome") is not None or which("kb") is not None,
+        # The gate command the template actually invokes: probe the REAL command
+        # via the shared constant, not a dead alias. `doctor --self` asserts this
+        # constant == the template's command.
+        "gate_on_path": which(_GATE_COMMAND) is not None,
         "yml_exists": (repo_root / "lefthook.yml").is_file(),
         "yml_has_kb_check": False,
         "hooks_path": None,
@@ -262,7 +273,7 @@ def _lefthook_state(repo_root: Path, runner, which) -> dict:
 
 
 def count_stray_md(repo_root: Path) -> int:
-    """Markdown files outside any domain — kb does not index them (FYI only)."""
+    """Markdown files outside any domain — rhizome does not index them (FYI only)."""
     n = 0
     for p in repo_root.rglob("*.md"):
         if not sources._SKIP_DIRS.isdisjoint(p.parts):
@@ -294,7 +305,7 @@ def run_adopt(
     try:
         data = tomllib.loads(reg.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise AdoptUsageError(f"{reg}: {exc}")
+        raise AdoptUsageError(f"{reg}: {exc}") from exc
     # The literal workspace_root decides whether a `path =` line is needed.
     # Deliberately NOT the KB_WORKSPACE_ROOT env override: the other registry
     # consumers (<service-manager> indexer, surface-hook) run without this process's env,
@@ -328,9 +339,14 @@ def run_adopt(
     gate_via_precommit = lh["precommit_gate"] and not lh["yml_exists"]
     if lh["binary"] is None and not gate_via_precommit:
         raise AdoptUsageError("lefthook not found on PATH (brew install lefthook)")
-    if not lh["kb_on_path"]:
-        warnings.append(
-            "`rhizome` not on PATH — the hook runs in a fresh shell and will fail; check ~/.local/bin"
+    if not lh["gate_on_path"]:
+        # Fail closed, never warn-and-continue: a repo registered with a gate command
+        # that dies in the hook's fresh shell is precisely the silent drift adopt exists
+        # to prevent (the registry/index steps already self-verify before declaring done).
+        raise AdoptUsageError(
+            "`rhizome` not on PATH — the lefthook gate would be written but fail in the "
+            "hook's fresh shell, leaving a registered repo whose KB check never runs. "
+            "Install it (~/.local/bin) and re-run."
         )
     if not gate_via_precommit:
         for mgr in lh["other_manager"]:
@@ -365,7 +381,7 @@ def run_adopt(
             {
                 "step": "index",
                 "status": CHANGED,
-                "detail": f"wrote {dest.relative_to(repo_root)} (domain: docs), kb check ok",
+                "detail": f"wrote {dest.relative_to(repo_root)} (domain: docs), rhizome check ok",
             }
         )
     else:
@@ -387,7 +403,7 @@ def run_adopt(
             {
                 "step": "lefthook",
                 "status": OK,
-                "detail": "gate already wired via pre-commit framework (.pre-commit-config.yaml runs kb check)",
+                "detail": "gate already wired via pre-commit framework (.pre-commit-config.yaml runs rhizome check)",
             }
         )
         return _result(reg, repo_root, name, steps, warnings)
@@ -396,7 +412,7 @@ def run_adopt(
         wrote_yml = True
     elif not lh["yml_has_kb_check"]:
         warnings.append(
-            "existing lefthook.yml has no `kb check` command — left untouched, add the gate manually"
+            "existing lefthook.yml has no `rhizome check` command — left untouched, add the gate manually"
         )
 
     if lh["hooks_path"]:

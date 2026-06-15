@@ -1,0 +1,13 @@
+# 装: uv tool install pre-commit --with pre-commit-uv
+# 心智: 本地提速反馈; 真正强制 gate 在 CI。
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.16
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: "0.11.19"
+    hooks:
+      - id: uv-lock

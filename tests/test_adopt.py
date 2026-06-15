@@ -13,8 +13,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from kb.adopt import AdoptError, AdoptUsageError, run_adopt
-from kb.cli import main
+from rhizome.adopt import AdoptError, AdoptUsageError, run_adopt
+from rhizome.cli import main
 
 
 class _Runner:
@@ -150,7 +150,7 @@ class TestAdopt(unittest.TestCase):
             ws, reg = self._ws(tmp)
             self._repo(ws, domain="docs")
             reg.write_text(reg.read_text().rstrip("\n"), encoding="utf-8")
-            res, _ = self._adopt("proj", reg)
+            self._adopt("proj", reg)
             data = tomllib.loads(reg.read_text())
             self.assertIn("proj", [e["name"] for e in data["source"]])
 
@@ -257,6 +257,27 @@ class TestAdopt(unittest.TestCase):
                     cwd=Path("/"),
                 )
 
+    def test_gate_command_missing_fails_closed(self):
+        # The gate command not resolving must FAIL the adopt, not warn-and-continue:
+        # a registered repo whose KB check never runs in the hook's fresh shell is
+        # exactly the silent drift adopt exists to prevent.
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            repo = self._repo(ws, domain="docs")
+            before = reg.read_text()
+            with self.assertRaisesRegex(AdoptUsageError, "not on PATH"):
+                run_adopt(
+                    "proj",
+                    registry=reg,
+                    runner=_Runner(),
+                    which=lambda n: None if n == "rhizome" else f"/fake/bin/{n}",
+                    cwd=Path("/"),
+                )
+            self.assertEqual(
+                reg.read_text(), before
+            )  # probe-before-write: nothing written
+            self.assertFalse((repo / "lefthook.yml").exists())
+
     def test_failed_recovery_rerun_converges(self):
         # Step ② failed (missing -d/-k); re-run WITH them must finish the job.
         with tempfile.TemporaryDirectory() as tmp:
@@ -278,7 +299,7 @@ class TestAdopt(unittest.TestCase):
             (repo / "lefthook.yml").write_text(custom)
             res, runner = self._adopt("proj", reg)
             self.assertEqual((repo / "lefthook.yml").read_text(), custom)
-            self.assertTrue(any("no `kb check`" in w for w in res["warnings"]))
+            self.assertTrue(any("no `rhizome check`" in w for w in res["warnings"]))
             self.assertEqual(len(runner.install_calls), 1)  # still converges the hook
 
     def test_commented_kb_check_is_not_enough(self):
@@ -289,7 +310,7 @@ class TestAdopt(unittest.TestCase):
                 "# kb check lives here someday\npre-commit:\n"
             )
             res, _ = self._adopt("proj", reg)
-            self.assertTrue(any("no `kb check`" in w for w in res["warnings"]))
+            self.assertTrue(any("no `rhizome check`" in w for w in res["warnings"]))
 
     def test_precommit_framework_gate_counts_as_converged(self):
         # Live case: the kb gate wired through .pre-commit-config.yaml.
@@ -378,16 +399,32 @@ class TestAdopt(unittest.TestCase):
                 encoding="utf-8",
             )
             os.environ["KB_SOURCES"] = str(reg)
-            stdout = io.StringIO()
-            with contextlib.redirect_stdout(stdout):
-                rc = main(["adopt", str(repo), "--json"])
-            self.assertEqual(rc, 0)
-            out = json.loads(stdout.getvalue())
-            self.assertEqual(out["name"], "proj")
-            self.assertEqual(
-                {s["step"] for s in out["steps"]}, {"registry", "index", "lefthook"}
-            )
-            self.assertEqual({s["status"] for s in out["steps"]}, {"ok"})
+            # main() probes the real PATH for `lefthook` and the gate command;
+            # stub both so the test is hermetic (CI has neither installed). The
+            # repo is already fully adopted, so they are only `which`-probed,
+            # never executed.
+            stub_bin = Path(tmp) / "stub-bin"
+            stub_bin.mkdir()
+            for _tool in ("lefthook", "rhizome"):
+                _exe = stub_bin / _tool
+                _exe.write_text("#!/bin/sh\nexit 0\n")
+                _exe.chmod(0o755)
+            _saved_path = os.environ["PATH"]
+            os.environ["PATH"] = f"{stub_bin}{os.pathsep}{_saved_path}"
+            try:
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    rc = main(["adopt", str(repo), "--json"])
+                self.assertEqual(rc, 0)
+                out = json.loads(stdout.getvalue())
+                self.assertEqual(out["name"], "proj")
+                self.assertEqual(
+                    {s["step"] for s in out["steps"]},
+                    {"registry", "index", "lefthook"},
+                )
+                self.assertEqual({s["status"] for s in out["steps"]}, {"ok"})
+            finally:
+                os.environ["PATH"] = _saved_path
 
 
 if __name__ == "__main__":

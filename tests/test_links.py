@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from kb import check, links
+from rhizome import check, links
 
 
 def _mkrepo(root: Path) -> Path:
@@ -96,6 +96,35 @@ class TestLinkFindings(unittest.TestCase):
         self.assertEqual(
             self._findings("a.md", _note(code=["mydb.s_report_config"])), []
         )
+
+    def test_code_root_unresolvable_without_env(self):
+        # A code entry living under a workspace aggregate dir does not resolve
+        # while RHIZOME_CODE_ROOTS is unset (public default = no extra roots).
+        ws = self.root / "ws"
+        (ws / "aggdir" / "sub").mkdir(parents=True)
+        (ws / "aggdir" / "sub" / "x.py").write_text("", encoding="utf-8")
+        os.environ["KB_WORKSPACE_ROOT"] = str(ws)
+        os.environ.pop("RHIZOME_CODE_ROOTS", None)
+        try:
+            f = self._findings("a.md", _note(code=["sub/x.py"]))
+        finally:
+            os.environ["KB_WORKSPACE_ROOT"] = str(self.root / "no-such-ws")
+        self.assertEqual([x.severity for x in f], [check.WARN])
+
+    def test_code_root_resolvable_via_env(self):
+        # Injecting the aggregate dir name via RHIZOME_CODE_ROOTS makes the same
+        # entry resolve — env extends the code-root search set additively.
+        ws = self.root / "ws"
+        (ws / "aggdir" / "sub").mkdir(parents=True)
+        (ws / "aggdir" / "sub" / "x.py").write_text("", encoding="utf-8")
+        os.environ["KB_WORKSPACE_ROOT"] = str(ws)
+        os.environ["RHIZOME_CODE_ROOTS"] = "aggdir"
+        try:
+            f = self._findings("a.md", _note(code=["sub/x.py"]))
+        finally:
+            os.environ["KB_WORKSPACE_ROOT"] = str(self.root / "no-such-ws")
+            os.environ.pop("RHIZOME_CODE_ROOTS", None)
+        self.assertEqual(f, [])
 
     def test_check_path_surfaces_link_findings(self):
         p = self._write("a.md", _note(["no-such-note"]))

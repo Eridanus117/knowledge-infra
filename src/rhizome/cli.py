@@ -17,7 +17,8 @@ import sys
 from pathlib import Path
 
 from . import adopt as adopt_mod
-from . import check, contract, sources
+from . import amend as amend_mod
+from . import check, contract, doctor, sources
 from .contract import ContractError
 
 
@@ -96,7 +97,7 @@ def run_new(
 
     dest = domain_dir / f"{topic}.md"
     if dest.exists():
-        raise CliError(f"note already exists: {dest} (kb does not overwrite)")
+        raise CliError(f"note already exists: {dest} (rhizome does not overwrite)")
 
     fm = contract.render_frontmatter(
         description=description,
@@ -194,7 +195,7 @@ def _build_parser() -> argparse.ArgumentParser:
     dom.add_argument(
         "--diff",
         action="store_true",
-        help="completeness check: discovered domains × actually-indexed",
+        help="completeness check: discovered domains vs actually-indexed",
     )
     dom.add_argument("--json", action="store_true", help="emit as JSON")
 
@@ -218,6 +219,46 @@ def _build_parser() -> argparse.ArgumentParser:
         help="comma-separated recall keywords (required only when the repo has no domain yet)",
     )
     adp.add_argument("--json", action="store_true", help="emit result as JSON")
+
+    doc = sub.add_parser(
+        "doctor",
+        help="KB pipeline-integrity checks: source repos (--sources) and/or the tool itself (--self)",
+    )
+    doc.add_argument(
+        "--sources",
+        action="store_true",
+        help="check every registered KB source repo (gate present + gate resolvable + INDEX present)",
+    )
+    doc.add_argument(
+        "--self",
+        dest="self_check",
+        action="store_true",
+        help="check the tool's own gate template/probe consistency (catches a rename at the template)",
+    )
+    doc.add_argument(
+        "--all",
+        dest="all_checks",
+        action="store_true",
+        help="run both --sources and --self",
+    )
+    doc.add_argument("--json", action="store_true", help="emit report as JSON")
+
+    amd = sub.add_parser(
+        "amend",
+        help="audited in-place edit of ONE frozen doc — provenance-tracked bypass of the "
+        "frozen gate, replacing bare --no-verify",
+    )
+    amd.add_argument(
+        "file",
+        help="the frozen KB doc to amend (must be status: frozen / kind: decision in HEAD)",
+    )
+    amd.add_argument(
+        "-m",
+        "--reason",
+        required=True,
+        help="why this frozen doc is being amended — recorded in the commit trailer + ledger (the audit)",
+    )
+    amd.add_argument("--json", action="store_true", help="emit result as JSON")
     return parser
 
 
@@ -564,6 +605,111 @@ def _cmd_adopt(args) -> int:
     return 0
 
 
+def _print_sources_report(report: dict) -> None:
+    print(f"doctor --sources ({report['registry']})")
+    for r in report["sources"]:
+        mark = "OK" if r["ok"] else "FAIL"
+        print(f"  [{mark}] {r['name']} ({r['path']})")
+        for c in r["checks"]:
+            sym = "+" if c["status"] == doctor.PASS else "x"
+            stream = sys.stdout if c["status"] == doctor.PASS else sys.stderr
+            print(f"      {sym} {c['check']:<16} {c['detail']}", file=stream)
+    n_fail = sum(1 for r in report["sources"] if not r["ok"])
+    n_total = len(report["sources"])
+    if report["ok"]:
+        print(f"doctor --sources: ok ({n_total} source(s), all gate+index checks pass)")
+    else:
+        print(
+            f"doctor --sources: {n_fail}/{n_total} source(s) FAIL — pipeline gate/index broken",
+            file=sys.stderr,
+        )
+
+
+def _print_self_report(report: dict) -> None:
+    mark = "OK" if report["ok"] else "FAIL"
+    print(f"doctor --self [{mark}] (tool-chain gate template/probe consistency)")
+    for c in report["checks"]:
+        sym = "+" if c["status"] == doctor.PASS else "x"
+        stream = sys.stdout if c["status"] == doctor.PASS else sys.stderr
+        print(f"  {sym} {c['check']:<22} {c['detail']}", file=stream)
+    if report["ok"]:
+        print(
+            f"doctor --self: ok ({len(report['checks'])} check(s), gate template ⇔ probe consistent)"
+        )
+    else:
+        n_fail = sum(1 for c in report["checks"] if c["status"] != doctor.PASS)
+        print(
+            f"doctor --self: {n_fail}/{len(report['checks'])} check(s) FAIL — "
+            "gate template/probe inconsistent (rename hazard)",
+            file=sys.stderr,
+        )
+
+
+def _cmd_doctor(args) -> int:
+    # Pick the mode(s). --all = both; otherwise honor each flag. At least one is
+    # required so a future mode can join without silently changing the default.
+    want_sources = args.sources or args.all_checks
+    want_self = args.self_check or args.all_checks
+    if not (want_sources or want_self):
+        print(
+            "rhizome doctor: pass --sources and/or --self (or --all)", file=sys.stderr
+        )
+        return 2
+
+    sources_report = self_report = None
+    if want_sources:
+        try:
+            sources_report = doctor.run_doctor()
+        except sources.SourcesError as exc:
+            print(f"rhizome doctor: {exc}", file=sys.stderr)
+            return 2
+    if want_self:
+        self_report = doctor.run_self_check()
+
+    if args.json:
+        if want_sources and want_self:
+            payload = {
+                "sources": sources_report,
+                "self": self_report,
+                "ok": sources_report["ok"] and self_report["ok"],
+            }
+        else:
+            payload = sources_report if want_sources else self_report
+        print(json.dumps(payload, ensure_ascii=False))
+        return 0 if payload["ok"] else 1
+
+    ok = True
+    if sources_report is not None:
+        _print_sources_report(sources_report)
+        ok = ok and sources_report["ok"]
+    if self_report is not None:
+        _print_self_report(self_report)
+        ok = ok and self_report["ok"]
+    return 0 if ok else 1
+
+
+def _cmd_amend(args) -> int:
+    try:
+        result = amend_mod.run_amend(args.file, reason=args.reason, cwd=Path.cwd())
+    except amend_mod.AmendUsageError as exc:
+        print(f"rhizome amend: {exc}", file=sys.stderr)
+        return 2
+    except amend_mod.AmendError as exc:
+        print(f"rhizome amend: {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+
+    print(f"amended frozen doc {result['rel']}")
+    print(f"  commit: {result['commit']}")
+    print(f"  reason: {result['reason']}")
+    print(f"  trailer: {amend_mod.TRAILER_KEY}: {result['reason']}")
+    print(f"  ledger: {result['ledger']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "new":
@@ -574,6 +720,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_domains(args)
     if args.command == "adopt":
         return _cmd_adopt(args)
+    if args.command == "doctor":
+        return _cmd_doctor(args)
+    if args.command == "amend":
+        return _cmd_amend(args)
     return 2  # argparse enforces subcommand presence; defensive
 
 

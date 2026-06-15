@@ -9,14 +9,40 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.scripts]
-rhizome = "kb.cli:main"
+rhizome = "rhizome.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/kb"]
+packages = ["src/rhizome"]
+
+[dependency-groups]
+# ruff/pyrefly 不入此组: 走全局 uv tool 装一次 (EDR 友好——各仓 .venv 只剩纯 Python,
+# 不会每个新仓 sync 都拉 Rust 二进制惊动 EDR)。一次性: uv tool install ruff pyrefly
+dev = [
+    "pytest>=8.0",
+    "poethepoet",
+]
+
+[tool.poe.tasks]
+lint = "uvx ruff@0.15.16 check ."
+fmt = "uvx ruff@0.15.16 format ."
+typecheck = "pyrefly check"
+test = "pytest"
+check = { sequence = ["lint", "typecheck", "test"], help = "lint + typecheck + test" }
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
