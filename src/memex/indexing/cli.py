@@ -215,7 +215,7 @@ def sync_cmd(
 
 
 @app.command(name="sync-all")
-def sync_all_cmd(
+def sync_all_cmd(  # noqa: C901, PLR0912, PLR0915 — typer 命令: 选项解析 + 逐仓循环 + 退出码/汇总编排天然长, 抽函数只会把单一命令打散
     apply: bool = typer.Option(
         False, "--apply", help="真写 qdrant + 落盘 compiled(默认 dry-run 零写入)"
     ),

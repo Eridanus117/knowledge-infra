@@ -104,7 +104,7 @@ class HybridEngine:
             "semantic_depth_cap": SEMANTIC_DEPTH_CAP if low else None,
         }
 
-    def search(
+    def search(  # noqa: PLR0913 — 公开检索 API 的检索参数(k/repo/vector/facets/collect), 不是该折成配置对象的内部杂参
         self,
         query: str,
         k: int = 10,

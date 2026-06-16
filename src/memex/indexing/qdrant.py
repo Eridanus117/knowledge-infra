@@ -14,6 +14,8 @@ from typing import Any
 
 from memex.config import Settings, settings
 
+_HTTP_NOT_FOUND = 404
+
 
 class QdrantError(Exception):
     """qdrant HTTP/网络错误(含状态码与响应摘要)。"""
@@ -54,11 +56,11 @@ class Qdrant:
     def collection_exists(self, name: str) -> bool:
         try:
             self._request("GET", f"/collections/{name}")
-            return True
         except QdrantError as exc:
-            if exc.code == 404:
+            if exc.code == _HTTP_NOT_FOUND:
                 return False
             raise
+        return True
 
     def create_collection(self, name: str, vector_name: str, dim: int) -> None:
         self._request(

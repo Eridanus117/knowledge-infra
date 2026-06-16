@@ -12,6 +12,9 @@ import re
 
 _FM_KEY_RE = re.compile(r"^([A-Za-z0-9_-]+):(.*)$")
 
+# 最短带引号 scalar = 一对引号(开+闭)。
+_MIN_QUOTED_LEN = 2
+
 
 class FrontmatterError(ValueError):
     """frontmatter 结构损坏(开了 --- 却不闭合)。"""
@@ -35,7 +38,7 @@ def split_frontmatter(text: str) -> tuple[str, str] | None:
 
 def _unquote(s: str) -> str:
     s = s.strip()
-    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+    if len(s) >= _MIN_QUOTED_LEN and s[0] == s[-1] and s[0] in "\"'":
         inner = s[1:-1]
         if s[0] == '"':
             inner = inner.replace('\\"', '"').replace("\\\\", "\\")
@@ -94,7 +97,7 @@ def _strip_comment(s: str) -> str:
     return "".join(out).strip()
 
 
-def parse_frontmatter(text: str) -> dict[str, object] | None:
+def parse_frontmatter(text: str) -> dict[str, object] | None:  # noqa: C901 — port 上游宽松 flat 解析器的逐 case 语义(见模块 docstring), 拆分会偏离对齐口径
     """解析 note frontmatter 为扁平 dict, 无 frontmatter 返回 None。
 
     结构损坏抛 FrontmatterError。支持 flow list(可跨行)、block list(`- x`)、

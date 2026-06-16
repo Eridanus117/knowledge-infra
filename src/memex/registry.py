@@ -58,6 +58,17 @@ def load_source_registry() -> SourceRegistry:
     """
     log = logging.getLogger(__name__)
     reg = Path(os.environ.get("KB_SOURCES", str(_KB_SOURCES_DEFAULT))).expanduser()
+
+    def _degraded(reason: str) -> SourceRegistry:
+        # stdlib logging(非 structlog): PrintLogger 会绑死被 capture 的流, CLI 场景易炸。
+        log.warning("kb sources degraded to builtin defaults: %s", reason)
+        return SourceRegistry(
+            repos=dict(DEFAULT_SOURCE_REPOS),
+            degraded=True,
+            reason=reason,
+            legacy=DEFAULT_LEGACY_REPOS,
+        )
+
     try:
         data = tomllib.loads(reg.read_text(encoding="utf-8"))
         base = Path(
@@ -88,20 +99,12 @@ def load_source_registry() -> SourceRegistry:
             if entry.get("legacy") is True:
                 legacy.add(name)
         if not out:
-            raise ValueError("no usable [[source]] entries")
+            return _degraded(f"{reg}: no usable [[source]] entries")
         return SourceRegistry(
             repos=out, degraded=False, reason=None, legacy=frozenset(legacy)
         )
     except (OSError, tomllib.TOMLDecodeError, ValueError) as exc:
-        # stdlib logging(非 structlog): PrintLogger 会绑死被 capture 的流, CLI 场景易炸。
-        reason = f"{reg}: {exc}"
-        log.warning("kb sources degraded to builtin defaults: %s", reason)
-        return SourceRegistry(
-            repos=dict(DEFAULT_SOURCE_REPOS),
-            degraded=True,
-            reason=reason,
-            legacy=DEFAULT_LEGACY_REPOS,
-        )
+        return _degraded(f"{reg}: {exc}")
 
 
 def load_source_repos() -> dict[str, Path]:

@@ -41,6 +41,9 @@ POINT_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "memex:point-id:v1")
 _RETRIEVE_BATCH = 256
 _SCROLL_PAGE = 256
 
+# 渲染时每个清单最多逐条列出多少项, 超出折叠成 "... 共 N 篇"。
+_RENDER_LIST_CAP = 20
+
 # payload 全字段(C5 + text_hash;比较/覆盖都以此为准)。
 PAYLOAD_KEYS: tuple[str, ...] = (
     "identity",
@@ -151,7 +154,7 @@ class SyncReport:
             f"prune候选 {len(self.prune_candidates)}, 失败 {len(self.failures)}"
         )
 
-    def render(self) -> str:
+    def render(self) -> str:  # noqa: C901 — 报告渲染: 逐 section 拼装文本行, 分支多但线性、无嵌套逻辑
         lines = [f"--- sync {self.summary_line()}"]
         if self.error:
             return "\n".join(lines)
@@ -164,8 +167,8 @@ class SyncReport:
         ):
             if items:
                 lines.append(f"  {label} [{len(items)}]:")
-                lines.extend(f"    - {x}" for x in items[:20])
-                if len(items) > 20:
+                lines.extend(f"    - {x}" for x in items[:_RENDER_LIST_CAP])
+                if len(items) > _RENDER_LIST_CAP:
                     lines.append(f"    ... 共 {len(items)} 篇")
         if self.prune_candidates:
             lines.append(f"  prune 候选 [{len(self.prune_candidates)}]:")
@@ -253,7 +256,7 @@ def _find_reusable_vector(
     return vec if isinstance(vec, list) else None
 
 
-def sync_repo(
+def sync_repo(  # noqa: C901, PLR0913, PLR0911, PLR0912, PLR0915 — compile→diff→embed→prune 守卫→落盘的单仓 sync 编排; dry-run/apply/force 多路径耦合, 强拆会割裂事务语义
     name: str,
     repo_root: Path,
     *,

@@ -115,7 +115,7 @@ def _check_semantic_indexed(
     return {key: (pid in found) for pid, key in ids.items()}, None
 
 
-def recall(
+def recall(  # noqa: C901, PLR0912, PLR0915 — lane 分派(lexical/semantic/hybrid)+ facet 校验 + 健康采集编排; 单一检索入口, 拆分会把 lane 路由逻辑打散
     text: str,
     *,
     limit: int = 10,

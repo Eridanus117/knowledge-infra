@@ -31,6 +31,11 @@ from memex import __version__
 STDOUT_CAP = 2048
 STDERR_CAP = 4096
 
+# exit codes >= this are hard faults (usage / unknown command); 1 without a
+# message is an intentional non-zero (e.g. lint found problems), not a failure.
+_HARD_FAULT_EXIT = 2
+_PCTILE_MAX = 100
+
 _ENV_DB = "KB_SEARCH_TELEMETRY_DB"
 _ENV_OFF = "KB_SEARCH_TELEMETRY_OFF"
 
@@ -41,9 +46,7 @@ def db_path() -> Path:
     override = os.environ.get(_ENV_DB)
     if override:
         return Path(override)
-    base = os.environ.get("XDG_DATA_HOME") or os.path.join(
-        os.path.expanduser("~"), ".local", "share"
-    )
+    base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
     return Path(base) / "memex" / "telemetry.db"
 
 
@@ -255,7 +258,7 @@ def run_instrumented(
             "stdout": out_tee.sample,
             "stderr": err_tee.sample,
             "err": err_msg,
-            "cwd": os.getcwd(),
+            "cwd": str(Path.cwd()),
             "version": __version__,
             "is_tty": is_tty,
             "is_ci": bool(os.environ.get("CI")),
@@ -273,7 +276,7 @@ def _pctile(xs: list[int], p: int) -> int:
     if not xs:
         return 0
     s = sorted(xs)
-    if p >= 100:
+    if p >= _PCTILE_MAX:
         return s[-1]
     idx = p * len(s) // 100
     return s[min(idx, len(s) - 1)]
@@ -283,7 +286,7 @@ def _is_fault(exit_code: int, err: str) -> bool:
     """A real fault = a non-empty err message OR a hard exit (>= 2: usage /
     unknown command). An intentional exit-1-without-message (e.g. a lint that
     found problems) is the tool working, not failing — not counted as an error."""
-    return bool(err.strip()) or exit_code >= 2
+    return bool(err.strip()) or exit_code >= _HARD_FAULT_EXIT
 
 
 def _first_line(s: str) -> str:

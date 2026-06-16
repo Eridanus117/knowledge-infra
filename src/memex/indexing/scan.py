@@ -115,7 +115,7 @@ def _nearest_domain(
     while True:
         if cur in by_dir:
             return by_dir[cur]
-        if cur == root or cur.parent == cur:
+        if cur in (root, cur.parent):
             return None
         cur = cur.parent
 
