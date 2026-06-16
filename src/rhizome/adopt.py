@@ -12,7 +12,6 @@ write, so a failed run never leaves a half-adopted repo behind.
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import tomllib
@@ -146,7 +145,7 @@ def _tilde(p: Path) -> str:
 
 def _append_source(reg: Path, name: str, repo_root: Path, ws_literal: Path) -> None:
     """Append a [[source]] block as text (the registry is hand-maintained with
-    comments; never round-trip it through a serializer). Atomic via os.replace."""
+    comments; never round-trip it through a serializer). Atomic via Path.replace."""
     text = reg.read_text(encoding="utf-8")
     lines = ["[[source]]", f"name = {contract._dquote(name)}"]
     if repo_root.resolve() != (ws_literal / name).resolve():
@@ -156,7 +155,7 @@ def _append_source(reg: Path, name: str, repo_root: Path, ws_literal: Path) -> N
         text += "\n"
     tmp = reg.with_name("." + reg.name + ".adopt-tmp")
     tmp.write_text(text + "\n" + block, encoding="utf-8")
-    os.replace(tmp, reg)
+    tmp.replace(reg)
     # The registry feeds three consumers (indexer / surface-hook / recall);
     # verify the write parses and carries the new name before declaring done.
     try:
@@ -179,7 +178,8 @@ def _guard_index_case_variant(repo_root: Path) -> None:
     docs = repo_root / "docs"
     if not docs.is_dir():
         return
-    for fn in os.listdir(docs):
+    for entry in docs.iterdir():
+        fn = entry.name
         if (
             fn.lower() == contract.INDEX_FILENAME.lower()
             and fn != contract.INDEX_FILENAME
@@ -285,7 +285,7 @@ def count_stray_md(repo_root: Path) -> int:
     return n
 
 
-def run_adopt(
+def run_adopt(  # noqa: C901, PLR0912, PLR0915, PLR0913 — single convergence flow (each adopt option is a real, independent input); splitting would scatter the once-through ordering.
     repo_arg: str,
     *,
     description: str | None = None,

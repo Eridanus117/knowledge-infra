@@ -123,7 +123,7 @@ def _index_present(repo_root: Path) -> tuple[bool, str, list[str]]:
 
 
 def check_source(
-    name: str, repo_path: Path, *, gate_resolvable: tuple[bool, str], which
+    name: str, repo_path: Path, *, gate_resolvable: tuple[bool, str]
 ) -> dict:
     """Probe one registered source repo. Pure (no printing).
 
@@ -189,7 +189,7 @@ def run_doctor(*, registry: Path | None = None, which=shutil.which) -> dict:
     # a PATH fact, not per-repo. Probe it a single time, report it on every row.
     gate_resolvable = _gate_resolvable(which)
     results = [
-        check_source(name, path, gate_resolvable=gate_resolvable, which=which)
+        check_source(name, path, gate_resolvable=gate_resolvable)
         for name, path in entries
     ]
     return {

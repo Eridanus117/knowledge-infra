@@ -36,6 +36,11 @@ from .contract import ContractError
 ERROR = "error"
 WARN = "warn"
 
+# `git diff --name-status` lines are tab-separated: status field + at least one path.
+_NAME_STATUS_MIN_FIELDS = 2
+# A domain mapped to fewer than this many dirs is not a duplicate.
+_DUPLICATE_MIN_DIRS = 2
+
 # Narrow, single-file frozen-amend approval channel.
 # `rhizome amend` sets this env var to ONE absolute file path before spawning the
 # real `git commit`; lefthook inherits the env and runs `rhizome check`, which
@@ -64,7 +69,7 @@ class Finding:
         return f"{self.severity}: {loc}{self.message}"
 
 
-def check_text(text: str) -> list[Finding]:
+def check_text(text: str) -> list[Finding]:  # noqa: C901, PLR0912 — flat per-field validation cascade; each branch is an independent frontmatter rule.
     """Validate one note's raw text; return findings (possibly empty)."""
     try:
         fm = contract.parse_frontmatter(text)
@@ -333,7 +338,7 @@ def frozen_gate_findings(path: Path, text: str) -> list[Finding]:
     ]
 
 
-def staged_frozen_findings(repo_root: Path) -> list[Finding]:
+def staged_frozen_findings(repo_root: Path) -> list[Finding]:  # noqa: C901 — single git-diff parse loop with guard clauses; not decomposable without sharing state.
     """Repo-level: ERROR on staged delete/rename of a HEAD-frozen KB note.
 
     Per-file checks never see deletions (the path is gone from {staged_files}),
@@ -354,7 +359,7 @@ def staged_frozen_findings(repo_root: Path) -> list[Finding]:
     findings: list[Finding] = []
     for line in proc.stdout.splitlines():
         parts = line.split("\t")
-        if len(parts) < 2 or not parts[0]:
+        if len(parts) < _NAME_STATUS_MIN_FIELDS or not parts[0]:
             continue
         op = parts[0][0]
         if op not in ("D", "R"):
@@ -451,7 +456,7 @@ def mermaid_blocks(text: str) -> list[tuple[int, str]]:
     return blocks
 
 
-def mermaid_findings(text: str) -> list[Finding]:
+def mermaid_findings(text: str) -> list[Finding]:  # noqa: PLR0911 — early returns are distinct fast-exit gates (no fence / unclosed / each diagram-type check).
     blocks = mermaid_blocks(text)
     if not blocks:
         return []
@@ -563,7 +568,7 @@ def duplicate_domain_findings(repo_root: Path) -> list[Finding]:
 
     findings: list[Finding] = []
     for domain, dirs in sorted(by_domain.items()):
-        if len(dirs) < 2:
+        if len(dirs) < _DUPLICATE_MIN_DIRS:
             continue
         dirs = sorted(dirs)
         findings.append(

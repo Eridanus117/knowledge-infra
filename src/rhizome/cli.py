@@ -32,7 +32,7 @@ def _split_csv(value: str | None) -> list[str]:
     return [part.strip() for part in value.split(",") if part.strip()]
 
 
-def run_new(
+def run_new(  # noqa: C901, PLR0913 — one keyword arg per KB frontmatter/content field; arity is irreducible domain shape, not accidental.
     topic: str,
     *,
     description: str,
@@ -305,6 +305,8 @@ def _collect_check_paths(args) -> list[Path] | None:
 
 
 _FIXABLE_FIELDS = contract.KILLED_FIELDS | contract.DERIVED_FIELDS
+# Max referencing docs to list inline before truncating with "...".
+_EXTERNALIZE_REF_PREVIEW = 5
 
 
 def _fix_paths(paths: list[Path]) -> tuple[dict[str, list[str]], list[str]]:
@@ -386,7 +388,7 @@ def _staged_frozen_results() -> tuple[dict[str, list], bool]:
     return {"<staged-frozen>": findings}, True
 
 
-def _cmd_check(args) -> int:
+def _cmd_check(args) -> int:  # noqa: C901, PLR0912 — argparse subcommand dispatcher; branches map flag combinations to output modes.
     # --duplicate-domains / --staged-frozen are repo-level, not per-file; they
     # may run standalone (no paths) as the commit-hook repo guard, or alongside
     # the per-file checks (e.g. with --all).
@@ -443,8 +445,8 @@ def _cmd_check(args) -> int:
                 "externalize candidate: "
                 f"{asset!r} appears in {len(refs)} decision docs "
                 f"(threshold {contract.ASSET_EXTERNALIZE_REUSE_THRESHOLD}): "
-                + ", ".join(refs[:5])
-                + (" ..." if len(refs) > 5 else ""),
+                + ", ".join(refs[:_EXTERNALIZE_REF_PREVIEW])
+                + (" ..." if len(refs) > _EXTERNALIZE_REF_PREVIEW else ""),
             )
         )
 
@@ -547,10 +549,10 @@ def _cmd_domains(args) -> int:
             for d in node["domains"]:
                 desc = f" — {d['description']}" if d["description"] else ""
                 print(f"  {d['domain']}{desc}")
-        return 0
     except sources.SourcesError as exc:
         print(f"rhizome domains: {exc}", file=sys.stderr)
         return 2
+    return 0
 
 
 def _cmd_adopt(args) -> int:
@@ -710,7 +712,7 @@ def _cmd_amend(args) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911 — top-level command router; one return per subcommand dispatch.
     args = _build_parser().parse_args(argv)
     if args.command == "new":
         return _cmd_new(args)
