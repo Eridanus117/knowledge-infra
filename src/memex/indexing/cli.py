@@ -175,7 +175,7 @@ def sync_cmd(
     退出码: 0 全绿 / 1 硬失败 / 2 prune 守卫拒绝需人工 --force / 3 内容完整性发现
     (仅在无 1/2 时)。
     """
-    from memex.indexing.sync import sync_repo
+    from memex.indexing.sync import SyncMode, sync_repo
 
     repos, degraded_warn = _resolve_repos(repo)
     if degraded_warn:
@@ -186,7 +186,7 @@ def sync_cmd(
     any_needs_force = False
     integ = IntegrityReport()
     for name, path in repos.items():
-        c_out, s_rep = sync_repo(name, path, apply=apply, force=force)
+        c_out, s_rep = sync_repo(name, path, mode=SyncMode(apply=apply, force=force))
         typer.echo(c_out.report.render())
         integ.add_repo(c_out.report)
         typer.echo(s_rep.render())
@@ -231,7 +231,7 @@ def sync_all_cmd(  # noqa: C901, PLR0912, PLR0915 — typer 命令: 选项解析
     退出码: 0 全绿 / 1 任一仓硬失败 / 2 无硬失败但有 prune 拒绝(需人工 --force)/
     3 无 1/2 但有内容完整性发现(日审 cadence 据此告警)。
     """
-    from memex.indexing.sync import sync_repo
+    from memex.indexing.sync import SyncMode, sync_repo
 
     reg = load_source_registry()
     out_dir = out.expanduser() if out is not None else settings.compiled_dir
@@ -243,7 +243,9 @@ def sync_all_cmd(  # noqa: C901, PLR0912, PLR0915 — typer 命令: 选项解析
     integ = IntegrityReport()
     for name, path in reg.repos.items():
         try:
-            c_out, s_rep = sync_repo(name, path, apply=apply, force=force)
+            c_out, s_rep = sync_repo(
+                name, path, mode=SyncMode(apply=apply, force=force)
+            )
         except Exception as exc:  # 单仓意外崩溃不中断全批(D4)
             summaries.append(f"{name}: CRASH — {exc}")
             all_failures.append((name, f"crash: {exc}"))

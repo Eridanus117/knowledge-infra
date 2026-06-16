@@ -104,12 +104,11 @@ class HybridEngine:
             "semantic_depth_cap": SEMANTIC_DEPTH_CAP if low else None,
         }
 
-    def search(  # noqa: PLR0913 — 公开检索 API 的检索参数(k/repo/vector/facets/collect), 不是该折成配置对象的内部杂参
+    def search(
         self,
         query: str,
         k: int = 10,
         repo: str | None = None,
-        query_vector: list[float] | None = None,
         facets: Facets | None = None,
         collect: HealthCollector | None = None,
     ) -> list[HybridHit]:
@@ -119,11 +118,7 @@ class HybridEngine:
         # 不收窄时不传 kwarg → 默认路径与旧契约逐字节一致。
         fkw: dict[str, Facets] = {"facets": facets} if facets else {}
         lex_hits = self.lexical.search(query, k=SEMANTIC_DEPTH_CAP, repo=repo, **fkw)
-        vec = (
-            query_vector
-            if query_vector is not None
-            else self.semantic.embed([query])[0]
-        )
+        vec = self.semantic.embed([query])[0]
         sem_hits = self.semantic.search_vec(vec, k=SEMANTIC_DEPTH_CAP, repo=repo, **fkw)
         # stale gate: 过期向量不进融合, 该 key 降级靠 lexical 召回。
         # gate 永远跑(正确性);drops 仅在 collect 注入时记录(eval 不传 = 纯 gate)。

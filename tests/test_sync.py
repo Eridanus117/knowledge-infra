@@ -17,6 +17,7 @@ from memex.indexing.sync import (
     INDEX_PROFILE,
     POINT_KIND,
     UNIT_MODE_WHOLE,
+    SyncMode,
     build_payload,
     point_id,
     sync_repo,
@@ -193,7 +194,9 @@ def test_dry_run_writes_nothing(
     _index(tmp_path / "d" / "INDEX.md")
     _note(tmp_path / "d" / "a.md")
     fake = FakeQdrant()
-    _, rep = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=False)
+    _, rep = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=False)
+    )
     assert rep.dry_run
     assert len(rep.embedded) == 2  # INDEX + a 都计划 embed
     assert fake.write_ops == []  # 零写入, 含不建 collection
@@ -208,7 +211,9 @@ def test_apply_fresh_creates_collection_and_embeds(
     _index(tmp_path / "d" / "INDEX.md")
     _note(tmp_path / "d" / "a.md")
     fake = FakeQdrant()
-    _, rep = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    _, rep = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
+    )
     assert not rep.failures
     assert len(rep.embedded) == 2
     coll = fake.collections["testcoll"]
@@ -223,9 +228,11 @@ def test_rerun_unchanged_skips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     _index(tmp_path / "d" / "INDEX.md")
     _note(tmp_path / "d" / "a.md")
     fake = FakeQdrant()
-    sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    sync_repo("repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True))
     monkeypatch.setattr("memex.indexing.sync.embed_texts", _boom_embed)
-    _, rep2 = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    _, rep2 = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
+    )
     assert len(rep2.unchanged) == 2
     assert not rep2.embedded and not rep2.rekeyed and not rep2.payload_updated
 
@@ -240,7 +247,9 @@ def test_payload_drift_updates_payload_only(
     _index(tmp_path / "d" / "INDEX.md")
     _note(tmp_path / "d" / "a.md")
     fake = FakeQdrant()
-    out, _ = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    out, _ = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
+    )
     ident = next(d.identity for d in out.docs if d.source_path == "d/a.md")
     pid = point_id(ident)
     # 模拟 payload 漂移(如旧 commit_time);向量不该被动
@@ -249,7 +258,9 @@ def test_payload_drift_updates_payload_only(
     )
     old_vec = fake.collections["testcoll"]["points"][pid]["vector"]
     monkeypatch.setattr("memex.indexing.sync.embed_texts", _boom_embed)
-    _, rep = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    _, rep = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
+    )
     assert ident in rep.payload_updated
     new_pt = fake.collections["testcoll"]["points"][pid]
     assert "commit_time" not in new_pt["payload"]  # overwrite 删掉了陈旧 key
@@ -263,10 +274,14 @@ def test_content_change_reembeds(
     _index(tmp_path / "d" / "INDEX.md")
     _note(tmp_path / "d" / "a.md")
     fake = FakeQdrant()
-    out, _ = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    out, _ = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
+    )
     ident = next(d.identity for d in out.docs if d.source_path == "d/a.md")
     _note(tmp_path / "d" / "a.md", FM.replace("正文内容。", "改写后的正文,长度不同。"))
-    _, rep = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    _, rep = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
+    )
     assert ident in rep.embedded  # 内容变 → 重 embed
 
 
@@ -277,13 +292,17 @@ def test_rekey_reuses_vector_on_move(
     _index(tmp_path / "d" / "INDEX.md")
     _note(tmp_path / "d" / "a.md")
     fake = FakeQdrant()
-    out, _ = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    out, _ = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
+    )
     old_ident = next(d.identity for d in out.docs if d.source_path == "d/a.md")
     old_vec = fake.collections["testcoll"]["points"][point_id(old_ident)]["vector"]
     # 移动文件 = identity 变;内容没变 → 复用向量, 零 embed
     (tmp_path / "d" / "a.md").rename(tmp_path / "d" / "moved.md")
     monkeypatch.setattr("memex.indexing.sync.embed_texts", _boom_embed)
-    out2, rep = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    out2, rep = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
+    )
     new_ident = next(d.identity for d in out2.docs if d.source_path == "d/moved.md")
     assert new_ident in rep.rekeyed
     assert (
@@ -302,10 +321,12 @@ def test_rename_no_h1_note_rekeys_zero_embed(
     no_h1 = '---\ndescription: "无标题 note"\nkeywords: [k]\n---\n\n正文没有 H1。\n'
     _note(tmp_path / "d" / "old-name.md", no_h1)
     fake = FakeQdrant()
-    sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    sync_repo("repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True))
     (tmp_path / "d" / "old-name.md").rename(tmp_path / "d" / "new-name.md")
     monkeypatch.setattr("memex.indexing.sync.embed_texts", _boom_embed)
-    _, rep = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    _, rep = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
+    )
     assert len(rep.rekeyed) == 1
     assert not rep.embedded and not rep.failures
     repo = tmp_path.name
@@ -331,7 +352,9 @@ def test_mode_mismatch_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
             "unit_mode": "chunk",
         },
     )
-    _, rep = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    _, rep = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
+    )
     assert rep.error is not None and "unit-mode" in rep.error
     assert "整库重建" in rep.error
     assert all(not op.startswith(("upsert", "delete")) for op in fake.write_ops)
@@ -365,7 +388,9 @@ def test_mass_prune_guard_refuses(
     _note(tmp_path / "d" / "a.md")
     fake = FakeQdrant()
     _seed_ghosts(fake, tmp_path.name, 4)  # canonical repo = tmp basename
-    _, rep = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    _, rep = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
+    )
     assert len(rep.prune_candidates) == 4  # 4/4 > 50%
     assert rep.prune_refused is not None and "--force" in rep.prune_refused
     # M2: 文案点明双份暂存状态(已写入 N 个新点、旧点未删)
@@ -384,7 +409,9 @@ def test_mass_prune_refusal_dry_run_wording(
     _note(tmp_path / "d" / "a.md")
     fake = FakeQdrant()
     _seed_ghosts(fake, tmp_path.name, 4)
-    _, rep = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=False)
+    _, rep = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=False)
+    )
     assert rep.prune_refused is not None
     assert "将写入 2 个新点" in rep.prune_refused
 
@@ -398,7 +425,11 @@ def test_force_allows_mass_prune(
     fake = FakeQdrant()
     _seed_ghosts(fake, tmp_path.name, 4)
     _, rep = sync_repo(
-        "repo", tmp_path, client=fake, s=_settings(), apply=True, force=True
+        "repo",
+        tmp_path,
+        client=fake,
+        s=_settings(),
+        mode=SyncMode(apply=True, force=True),
     )
     assert len(rep.pruned) == 4
     assert rep.prune_refused is None
@@ -413,12 +444,14 @@ def test_dry_run_prune_candidates_not_deleted(
     _note(tmp_path / "d" / "a.md")
     _note(tmp_path / "d" / "b.md")
     fake = FakeQdrant()
-    sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    sync_repo("repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True))
     (tmp_path / "d" / "b.md").unlink()
     monkeypatch.setattr("memex.indexing.sync.embed_texts", _boom_embed)
     n_before = len(fake.collections["testcoll"]["points"])
     writes_before = len(fake.write_ops)
-    _, rep = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=False)
+    _, rep = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=False)
+    )
     assert len(rep.prune_candidates) == 1
     assert not rep.pruned
     assert len(fake.collections["testcoll"]["points"]) == n_before
@@ -434,7 +467,9 @@ def test_prune_other_repo_untouched(
     _note(tmp_path / "d" / "a.md")
     fake = FakeQdrant()
     _seed_ghosts(fake, "other-repo", 3)
-    _, rep = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    _, rep = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
+    )
     assert rep.prune_candidates == []
     assert len(fake.collections["testcoll"]["points"]) == 3 + 2
 
@@ -464,7 +499,11 @@ def test_single_doc_failure_continues(
     fake = FailingUpsertQdrant(f"{repo}:d:a")
     # batch=1 → 单篇单 upsert;a 失败不拖垮 INDEX/b
     _, rep = sync_repo(
-        "repo", tmp_path, client=fake, s=_settings(embed_batch_size=1), apply=True
+        "repo",
+        tmp_path,
+        client=fake,
+        s=_settings(embed_batch_size=1),
+        mode=SyncMode(apply=True),
     )
     assert len(rep.failures) == 1
     assert rep.failures[0][0] == f"{repo}:d:a"
@@ -482,7 +521,9 @@ def test_embed_failure_recorded_continues(
     _index(tmp_path / "d" / "INDEX.md")
     _note(tmp_path / "d" / "a.md")
     fake = FakeQdrant()
-    _, rep = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    _, rep = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
+    )
     assert len(rep.failures) == 2
     assert not rep.embedded  # 失败的从 embedded 移走
     assert all("embed" in err for _, err in rep.failures)
@@ -496,7 +537,7 @@ class DownQdrant(FakeQdrant):
 def test_qdrant_unreachable_reported(tmp_path: Path) -> None:
     _index(tmp_path / "d" / "INDEX.md")
     _, rep = sync_repo(
-        "repo", tmp_path, client=DownQdrant(), s=_settings(), apply=False
+        "repo", tmp_path, client=DownQdrant(), s=_settings(), mode=SyncMode(apply=False)
     )
     assert rep.error is not None and "不可达" in rep.error
 
@@ -511,7 +552,9 @@ def test_payload_includes_kind_explicit(
     _index(tmp_path / "d" / "INDEX.md")
     _note(tmp_path / "d" / "a.md")
     fake = FakeQdrant()
-    out, _ = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    out, _ = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
+    )
     ident = next(d.identity for d in out.docs if d.source_path == "d/a.md")
     pt = fake.collections["testcoll"]["points"][point_id(ident)]
     assert pt["payload"]["kind_explicit"] is True
@@ -526,7 +569,9 @@ def test_kind_explicit_rollout_payload_update_not_embed(
     _index(tmp_path / "d" / "INDEX.md")
     _note(tmp_path / "d" / "a.md")
     fake = FakeQdrant()
-    out, _ = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    out, _ = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
+    )
     ident = next(d.identity for d in out.docs if d.source_path == "d/a.md")
     pid = point_id(ident)
     pt = fake.collections["testcoll"]["points"][pid]
@@ -534,7 +579,9 @@ def test_kind_explicit_rollout_payload_update_not_embed(
     pt["payload"]["compiled_hash"] = "pre-rollout-hash"
     old_vec = pt["vector"]
     monkeypatch.setattr("memex.indexing.sync.embed_texts", _boom_embed)
-    _, rep = sync_repo("repo", tmp_path, client=fake, s=_settings(), apply=True)
+    _, rep = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
+    )
     assert ident in rep.payload_updated
     assert not rep.embedded and not rep.rekeyed
     new_pt = fake.collections["testcoll"]["points"][pid]

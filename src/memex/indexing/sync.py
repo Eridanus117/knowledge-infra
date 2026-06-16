@@ -44,6 +44,22 @@ _SCROLL_PAGE = 256
 # 渲染时每个清单最多逐条列出多少项, 超出折叠成 "... 共 N 篇"。
 _RENDER_LIST_CAP = 20
 
+# 待删点占本仓现存点的比例超过此阈值即触发 mass-prune 守卫(需 --force 放行)。
+_MASS_PRUNE_RATIO = 0.5
+
+
+@dataclass(frozen=True)
+class SyncMode:
+    """单仓 sync 的写入策略。默认 dry-run(零写入);apply 真写, force 放行 mass-prune 守卫。"""
+
+    apply: bool = False
+    force: bool = False
+
+
+# frozen → 可安全共享为默认参数 singleton(避开 B008 的可变默认陷阱)。
+_DRY_RUN = SyncMode()
+
+
 # payload 全字段(C5 + text_hash;比较/覆盖都以此为准)。
 PAYLOAD_KEYS: tuple[str, ...] = (
     "identity",
@@ -256,16 +272,16 @@ def _find_reusable_vector(
     return vec if isinstance(vec, list) else None
 
 
-def sync_repo(  # noqa: C901, PLR0913, PLR0911, PLR0912, PLR0915 — compile→diff→embed→prune 守卫→落盘的单仓 sync 编排; dry-run/apply/force 多路径耦合, 强拆会割裂事务语义
+def sync_repo(  # noqa: C901, PLR0911, PLR0912, PLR0915 — compile→diff→embed→prune 守卫→落盘的单仓 sync 编排; dry-run/apply/force 多路径耦合, 强拆会割裂事务语义
     name: str,
     repo_root: Path,
     *,
     client: Qdrant | None = None,
     s: Settings = settings,
-    apply: bool = False,
-    force: bool = False,
+    mode: SyncMode = _DRY_RUN,
 ) -> tuple[CompileOutput, SyncReport]:
     """compile + qdrant sync 一个源仓。默认 dry-run(零写入, 含不建 collection)。"""
+    apply, force = mode.apply, mode.force
     client = client if client is not None else Qdrant(s)
     out = compile_repo(name, repo_root)
     coll = s.central_collection
@@ -356,7 +372,9 @@ def sync_repo(  # noqa: C901, PLR0913, PLR0911, PLR0912, PLR0915 — compile→d
     report.prune_candidates = sorted(
         str((p.get("payload") or {}).get("identity")) for p in stale
     )
-    refuse_prune = bool(stale) and len(stale) * 2 > len(repo_points) and not force
+    refuse_prune = (
+        bool(stale) and len(stale) > len(repo_points) * _MASS_PRUNE_RATIO and not force
+    )
 
     def _refusal_msg(verb: str) -> str:
         # M2: 点明双份状态——新点照写、旧点未删, 运维要知道 collection 此刻是孤儿暂存态。
