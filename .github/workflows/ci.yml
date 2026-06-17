@@ -2,7 +2,9 @@ name: CI
 on: [push, pull_request]
 jobs:
   ci:
-    uses: source-gamma/.github/.github/workflows/python-ci.yml@v5
+    uses: source-gamma/.github/.github/workflows/python-ci.yml@v6
     with:
       private-deps: true
+      ruff-extend-ignore: "['E501','TRY003']"
+      ruff-extend-per-file-ignores: "{'tests/**'=['S101','PLR2004','ARG'],'**/cli.py'=['PLR0913']}"
     secrets: inherit

@@ -52,20 +52,23 @@ test = "pytest"
 check = { sequence = ["lint", "typecheck", "test"], help = "lint + typecheck + test" }
 freeze = { cmd = "pyinstaller --onefile --clean --name memex src/memex/cli.py", help = "打单文件 binary 到 dist/" }
 
-[tool.ruff]
-line-length = 88
-target-version = "py312"
-
+# Canonical ruff rules (select, per-file-ignores, flake8-bugbear) live in
+# source-gamma/.github/ruff.toml and are applied by the reusable CI workflow.
+# Only repo-specific overrides are declared here; they are passed to CI via
+# ruff-extend-ignore / ruff-extend-per-file-ignores workflow inputs.
+# For local lint: uvx ruff check --config <path-to-.github/ruff.toml>
+#   --config "lint.extend-ignore=['TRY003','E501']"
+#   --config "lint.extend-per-file-ignores={'tests/**'=['S101','PLR2004'],'**/cli.py'=['PLR0913']}" .
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RUF", "C901", "PLR", "RET", "TRY", "PTH", "ARG"]
 # TRY003: 禁止在 raise 处带消息是 opinionated 风格(逼每种错都建专用异常类),
 # 与"消息含运行时上下文的 f-string raise"惯用法冲突; TRY 组其余规则(空 except /
 # raise-from / try-else 等真问题)仍保留。
-ignore = ["E501", "TRY003"]
+extend-ignore = ["E501", "TRY003"]
 
-[tool.ruff.lint.per-file-ignores]
+[tool.ruff.lint.extend-per-file-ignores]
 # PLR2004: 测试里直接断言字面量(状态码/长度/计数)是惯用法, 不是魔数。
 # ARG: fake/mock 的方法与 lambda 要匹配真实接口签名, 未用形参是刻意保留。
+# S101: 测试里用 assert 是惯用法。
 "tests/**" = ["S101", "PLR2004", "ARG"]
 # typer 命令的每个 CLI 选项就是一个参数, 参数多是框架惯用法, 不是 PLR0913 真问题
 "**/cli.py" = ["PLR0913"]
@@ -81,4 +84,4 @@ source = ["src"]
 testpaths = ["tests"]
 
 [tool.uv.sources]
-orrery-telemetry = { git = "ssh://git@github.com/source-gamma/orrery-telemetry", rev = "v0.1.0" }
+orrery-telemetry = { git = "ssh://git@github.com/source-gamma/orrery-telemetry", tag = "v0.2.2" }

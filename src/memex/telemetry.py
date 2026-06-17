@@ -41,17 +41,24 @@ def record(rec: dict, *, path: Path | None = None) -> None:
     ot.record(rec, CFG, path=path)
 
 
-def run_instrumented(
+def run_instrumented(  # noqa: PLR0913 — thin pass-through mirror of ot.run_instrumented; each kwarg is an independent caller-tunable override, not a cohesive object
     app: Any,
     argv: list[str],
     *,
+    command_path: list[str] | None = None,
     prog_name: str | None = None,
     meta: dict | None = None,
     path: Path | None = None,
 ) -> int:
     """Run a Typer/Click `app` under telemetry capture; delegates to orrery_telemetry core."""
     return ot.run_instrumented(
-        app, argv, CFG, prog_name=prog_name, meta=meta, path=path
+        app,
+        argv,
+        CFG,
+        command_path=command_path,
+        prog_name=prog_name,
+        meta=meta,
+        path=path,
     )
 
 

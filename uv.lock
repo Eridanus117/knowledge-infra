@@ -213,7 +213,7 @@ requires-dist = [
     { name = "bm25s", specifier = ">=0.3.9" },
     { name = "jieba", specifier = ">=0.42.1" },
     { name = "numpy", specifier = ">=2.4.6" },
-    { name = "orrery-telemetry", git = "ssh://git@github.com/source-gamma/orrery-telemetry?rev=v0.1.0" },
+    { name = "orrery-telemetry", git = "ssh://git@github.com/source-gamma/orrery-telemetry?tag=v0.2.2" },
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "structlog", specifier = ">=24.0" },
     { name = "typer", specifier = ">=0.12" },
@@ -292,8 +292,8 @@ wheels = [
 
 [[package]]
 name = "orrery-telemetry"
-version = "0.1.0"
-source = { git = "ssh://git@github.com/source-gamma/orrery-telemetry?rev=v0.1.0#e967d6fe3b9561f23c6d6970f1a776382e05ebeb" }
+version = "0.2.0"
+source = { git = "ssh://git@github.com/source-gamma/orrery-telemetry?tag=v0.2.2#1f3221cce4371e2c66f1686ce358c08059877dcf" }
 
 [[package]]
 name = "packaging"
