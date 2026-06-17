@@ -33,22 +33,17 @@ typecheck = "pyrefly check"
 test = "pytest"
 check = { sequence = ["lint", "typecheck", "test"], help = "lint + typecheck + test" }
 
-[tool.ruff]
-line-length = 88
-target-version = "py311"
-
+# Canonical ruff rules live in source-gamma/.github/ruff.toml (applied by CI).
+# Only repo-specific overrides are declared here; passed to CI via workflow inputs.
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RUF", "C901", "PLR", "RET", "TRY", "PTH", "ARG"]
-# E501: line length enforced by the formatter, not the linter.
-# TRY003: this CLI deliberately raises a few domain exceptions (SourcesError,
-#   ContractError, AdoptError) carrying dynamic f-string diagnostics; one
-#   subclass per message would be strictly worse. All other TRY rules stay on.
-ignore = ["E501", "TRY003"]
+# TRY003: this CLI deliberately raises domain exceptions (SourcesError,
+#   ContractError, AdoptError) with f-string diagnostics at the raise site;
+#   one subclass per message would be strictly worse.
+extend-ignore = ["TRY003"]
 
-[tool.ruff.lint.per-file-ignores]
-# Test doubles/stubs deliberately mirror real call signatures and ignore the
-# values (ARG); magic literals are fine in assertions (PLR2004); asserts (S101).
-"tests/**" = ["S101", "PLR2004", "ARG001", "ARG002"]
+[tool.ruff.lint.extend-per-file-ignores]
+# ARG: test doubles mirror real signatures without using all params — normal pytest idiom.
+"tests/**" = ["ARG"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

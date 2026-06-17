@@ -32,7 +32,7 @@ def _split_csv(value: str | None) -> list[str]:
     return [part.strip() for part in value.split(",") if part.strip()]
 
 
-def run_new(  # noqa: C901, PLR0913 — one keyword arg per KB frontmatter/content field; arity is irreducible domain shape, not accidental.
+def run_new(  # noqa: C901 — one keyword arg per KB frontmatter/content field; arity is irreducible domain shape, not accidental.
     topic: str,
     *,
     description: str,
