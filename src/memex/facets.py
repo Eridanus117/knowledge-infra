@@ -27,7 +27,10 @@ class Facets:
     def __post_init__(self) -> None:
         object.__setattr__(self, "domain", _norm(self.domain))
         object.__setattr__(self, "kind", _norm(self.kind))
-        object.__setattr__(self, "tag", _norm(self.tag))
+        # tag 与写侧 keywords 同口径 case-fold,消除 'PM'/'pm' 漂移;
+        # domain/kind 共用 _norm 不动,只收 tag 这一维。
+        tag = _norm(self.tag)
+        object.__setattr__(self, "tag", tag.casefold() if tag else None)
 
     def __bool__(self) -> bool:
         return any((self.domain, self.kind, self.tag))

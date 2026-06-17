@@ -162,7 +162,9 @@ def compile_note(note: ScannedNote, repo_root: Path) -> CompileResult:
     body_text = body_text.strip("\n")
 
     description = _str(fm.get("description"))
-    keywords = _str_list(fm.get("keywords"))
+    # tag 索引 case-fold:消除 acronym 大小写漂移('PM'/'pm' 不再分叉)。
+    # 只 casefold keywords,不动共享 _str_list(links/code 等路径字段不能 casefold)。
+    keywords = [k.casefold() for k in _str_list(fm.get("keywords"))]
     # 缺 kind 默认 note 会静默稀释 kind prior → 记录缺失供读路径 loud。
     # 越界但给了也算 explicit: 越界已有 kind_downgrades 单独 loud。
     kind_explicit = bool(_str(fm.get("kind")))

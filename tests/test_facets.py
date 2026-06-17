@@ -47,3 +47,15 @@ def test_matches_doc_kind_and_tag() -> None:
     # legacy doc(facet 字段空)在任何 facet 下都不命中。
     legacy = Doc(object_key="k", title="t", body="b", path="p")
     assert not Facets(kind="decision").matches_doc(legacy)
+
+
+def test_tag_casefold_eliminates_case_drift() -> None:
+    # tag 与写侧 keywords 同口径 casefold,'KB'/'kb' 不再分叉。
+    assert Facets(tag="KB").tag == "kb"
+    assert Facets(tag="KB").matches_doc(DOC)  # DOC.keywords 含 "kb"
+    assert {"key": "keywords", "match": {"value": "pm"}} in Facets(
+        tag="PM"
+    ).qdrant_must()
+    # 最小爆炸半径:domain/kind 共用 _norm,仍只 strip 不 casefold。
+    assert Facets(domain="Decisions").domain == "Decisions"
+    assert Facets(kind="Decision").kind == "Decision"

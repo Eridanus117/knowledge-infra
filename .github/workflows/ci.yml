@@ -3,3 +3,6 @@ on: [push, pull_request]
 jobs:
   ci:
     uses: source-gamma/.github/.github/workflows/python-ci.yml@v5
+    with:
+      private-deps: true
+    secrets: inherit
