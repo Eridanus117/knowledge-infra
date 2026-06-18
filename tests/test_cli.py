@@ -8,6 +8,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from rhizome.cli import CliError, _asset_reuse_candidates, main, run_new
 from rhizome.contract import ContractError
@@ -251,6 +252,64 @@ class TestCheckDuplicateDomainsCmd(unittest.TestCase):
             with self._chdir(repo), contextlib.redirect_stderr(err):
                 self.assertEqual(main(["check", "--duplicate-domains"]), 1)
             self.assertIn("duplicate-domain", err.getvalue())
+
+
+class TestDomainsCompact(unittest.TestCase):
+    """`domains --compact` (core inline / vertical collapsed) and `domains <repo>` drill.
+
+    Locks the surface-aware rendering the session-start KB hook depends on, so a
+    silent feature drop can't recur."""
+
+    def _build(self, base: Path) -> Path:
+        for repo, dom in (("core-kb", "alpha"), ("vert-kb", "beta")):
+            d = base / repo / dom
+            d.mkdir(parents=True)
+            (d / "INDEX.md").write_text(f"# {dom}\n")
+        reg = base / "kb-sources.toml"
+        reg.write_text(
+            f'workspace_root = "{base}"\n'
+            '[[source]]\nname = "core-kb"\nsurface = "core"\n'
+            '[[source]]\nname = "vert-kb"\nsurface = "vertical"\n'
+        )
+        return reg
+
+    def _run(self, argv, reg, base):
+        env = {"KB_SOURCES": str(reg), "KB_WORKSPACE_ROOT": str(base)}
+        out = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, env),
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            rc = main(argv)
+        return rc, out.getvalue()
+
+    def test_compact_core_inline_vertical_collapsed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            reg = self._build(base)
+            rc, out = self._run(["domains", "--compact"], reg, base)
+            self.assertEqual(rc, 0)
+            self.assertIn("alpha", out)  # core domain shown inline
+            self.assertIn("vertical(", out)  # vertical collapsed to a name line
+            self.assertIn("vert-kb", out)
+            self.assertNotIn("beta", out)  # vertical domain NOT expanded
+
+    def test_drill_one_repo_shows_its_domains(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            reg = self._build(base)
+            rc, out = self._run(["domains", "vert-kb"], reg, base)
+            self.assertEqual(rc, 0)
+            self.assertIn("beta", out)
+            self.assertNotIn("alpha", out)
+
+    def test_unknown_repo_returns_2(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            reg = self._build(base)
+            rc, _ = self._run(["domains", "nope"], reg, base)
+            self.assertEqual(rc, 2)
 
 
 if __name__ == "__main__":

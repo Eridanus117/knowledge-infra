@@ -69,6 +69,33 @@ class TestRegistry(unittest.TestCase):
         ):
             sources.load_sources(Path(tmp) / "nope.toml")
 
+    def test_load_source_entries_surface_tag_and_default(self):
+        # surface tags the compact-map tier; omitting it defaults to "vertical".
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            reg = base / "kb-sources.toml"
+            reg.write_text(
+                f'workspace_root = "{base}"\n'
+                '[[source]]\nname = "core-kb"\nsurface = "core"\n'
+                '[[source]]\nname = "vert-kb"\n'  # no surface → default vertical
+            )
+            entries = sources.load_source_entries(reg)
+            self.assertEqual(
+                [(e["name"], e["surface"]) for e in entries],
+                [("core-kb", "core"), ("vert-kb", "vertical")],
+            )
+
+    def test_invalid_surface_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            reg = base / "kb-sources.toml"
+            reg.write_text(
+                f'workspace_root = "{base}"\n'
+                '[[source]]\nname = "kb"\nsurface = "bogus"\n'
+            )
+            with self.assertRaises(sources.SourcesError):
+                sources.load_source_entries(reg)
+
 
 class TestDiscovery(unittest.TestCase):
     def test_discover_nested_domains_skips_root_index(self):

@@ -193,6 +193,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "domains", help="show the KB domain tree (registry + INDEX.md self-discovery)"
     )
     dom.add_argument(
+        "repo",
+        nargs="?",
+        help="drill one source repo: show only its domains (full tree)",
+    )
+    dom.add_argument(
+        "--compact",
+        action="store_true",
+        help="core sources inline; vertical sources listed by name "
+        "(expand a vertical with `rhizome domains <repo>`)",
+    )
+    dom.add_argument(
         "--diff",
         action="store_true",
         help="completeness check: discovered domains vs actually-indexed",
@@ -508,6 +519,28 @@ def _asset_reuse_candidates(paths: list[Path]) -> dict[str, list[str]]:
     }
 
 
+def _print_domain_node(node: dict) -> None:
+    mark = "" if node["exists"] else "  (MISSING)"
+    print(f"{node['name']}{mark}")
+    if not node["domains"]:
+        print("  (no domains — no INDEX.md)")
+    for d in node["domains"]:
+        desc = f" — {d['description']}" if d["description"] else ""
+        print(f"  {d['domain']}{desc}")
+
+
+def _print_domains_compact(tree: list[dict]) -> None:
+    """core sources inline (full domains); vertical sources collapsed to a
+    name list expandable via `rhizome domains <repo>`."""
+    vertical = [n for n in tree if n.get("surface") != "core"]
+    for node in (n for n in tree if n.get("surface") == "core"):
+        _print_domain_node(node)
+    if vertical:
+        names = " · ".join(n["name"] for n in vertical)
+        print()
+        print(f"vertical(按需 `rhizome domains <repo>`):{names}")
+
+
 def _cmd_domains(args) -> int:
     try:
         if args.diff:
@@ -538,17 +571,21 @@ def _cmd_domains(args) -> int:
             return 0
 
         tree = sources.build_tree()
+        if args.repo:
+            tree = [n for n in tree if n["name"] == args.repo]
+            if not tree:
+                print(
+                    f"rhizome domains: unknown source {args.repo!r}", file=sys.stderr
+                )
+                return 2
         if args.json:
             print(json.dumps(tree, ensure_ascii=False))
             return 0
-        for node in tree:
-            mark = "" if node["exists"] else "  (MISSING)"
-            print(f"{node['name']}{mark}")
-            if not node["domains"]:
-                print("  (no domains — no INDEX.md)")
-            for d in node["domains"]:
-                desc = f" — {d['description']}" if d["description"] else ""
-                print(f"  {d['domain']}{desc}")
+        if args.compact and not args.repo:
+            _print_domains_compact(tree)
+        else:
+            for node in tree:
+                _print_domain_node(node)
     except sources.SourcesError as exc:
         print(f"rhizome domains: {exc}", file=sys.stderr)
         return 2
