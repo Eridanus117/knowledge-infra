@@ -135,6 +135,11 @@ wheels = [
 ]
 
 [[package]]
+name = "gnomon"
+version = "0.3.0"
+source = { git = "ssh://git@github.com/source-gamma/gnomon?tag=v0.3.0#6ffec064c852dd938498e848e01aec151631655d" }
+
+[[package]]
 name = "iniconfig"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -188,9 +193,9 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "bm25s" },
+    { name = "gnomon" },
     { name = "jieba" },
     { name = "numpy" },
-    { name = "orrery-telemetry" },
     { name = "pydantic-settings" },
     { name = "structlog" },
     { name = "typer" },
@@ -211,9 +216,9 @@ freeze = [
 [package.metadata]
 requires-dist = [
     { name = "bm25s", specifier = ">=0.3.9" },
+    { name = "gnomon", git = "ssh://git@github.com/source-gamma/gnomon?tag=v0.3.0" },
     { name = "jieba", specifier = ">=0.42.1" },
     { name = "numpy", specifier = ">=2.4.6" },
-    { name = "orrery-telemetry", git = "ssh://git@github.com/source-gamma/orrery-telemetry?tag=v0.2.2" },
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "structlog", specifier = ">=24.0" },
     { name = "typer", specifier = ">=0.12" },
@@ -289,11 +294,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b2/d4/7c67becf668f973cb490cec3e98dfd799d866f9c989a54d355672cfa0db6/numpy-2.4.6-cp314-cp314t-win_amd64.whl", hash = "sha256:81a1cca95ed5bb92aa8b10dd2cdc9a0d3853a50fad926c28b5d7e8ea54389627", size = 12638908, upload-time = "2026-05-18T23:36:43.996Z" },
     { url = "https://files.pythonhosted.org/packages/43/bb/e1c71a4295b1b1d1393d50dbb4f2a36283c6859d9d3892e84f00ec5a91d5/numpy-2.4.6-cp314-cp314t-win_arm64.whl", hash = "sha256:0c9136e14ed34a9e343a31c533d78a9813a69a3148332bce5e9821cb2f996e66", size = 10565867, upload-time = "2026-05-18T23:36:47.114Z" },
 ]
-
-[[package]]
-name = "orrery-telemetry"
-version = "0.2.0"
-source = { git = "ssh://git@github.com/source-gamma/orrery-telemetry?tag=v0.2.2#1f3221cce4371e2c66f1686ce358c08059877dcf" }
 
 [[package]]
 name = "packaging"

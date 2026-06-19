@@ -18,7 +18,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "orrery-telemetry",
+    "gnomon",
     "typer>=0.12",
     "pydantic-settings>=2.0",
     "structlog>=24.0",
@@ -84,4 +84,4 @@ source = ["src"]
 testpaths = ["tests"]
 
 [tool.uv.sources]
-orrery-telemetry = { git = "ssh://git@github.com/source-gamma/orrery-telemetry", tag = "v0.2.2" }
+gnomon = { git = "ssh://git@github.com/source-gamma/gnomon", tag = "v0.3.0" }
