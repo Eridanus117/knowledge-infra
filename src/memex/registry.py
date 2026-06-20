@@ -14,11 +14,20 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-_WORKSPACE = Path(os.environ.get("KB_WORKSPACE_ROOT", str(Path.home() / "workspace")))
+def _workspace_root() -> Path:
+    return Path(
+        os.path.expandvars(
+            os.environ.get("KB_WORKSPACE_ROOT", str(Path.home() / "workspace"))
+        )
+    ).expanduser()
+
+
+_WORKSPACE = _workspace_root()
 _ARTIFACTS_SUBPATH = Path(".legacy-index/index/artifacts")
 # 源仓清单真相文件(authoring 工具侧产出);$KB_SOURCES 覆盖默认路径。
-# 默认指向 workspace 根下的 kb-sources.toml;不存在则 fallback 内置默认(见下)。
-_KB_SOURCES_DEFAULT = _WORKSPACE / "kb-sources.toml"
+# 默认指向 knowledge/personal/rhizome 下的 kb-sources.toml;不存在则 fallback 内置默认(见下)。
+_KB_SOURCES_RELATIVE = Path("knowledge/personal/rhizome/kb-sources.toml")
+_KB_SOURCES_LEGACY_RELATIVE = Path("rhizome/kb-sources.toml")
 
 # fallback 清单:无 kb-sources.toml 时使用的中性默认。
 # 实际部署请通过 kb-sources.toml(或 $KB_SOURCES)配置真实源仓;
@@ -46,6 +55,17 @@ def _illegal_name(name: str) -> bool:
     return "/" in name or "\\" in name or ".." in name or name.startswith("~")
 
 
+def _kb_sources_path() -> Path:
+    workspace = _workspace_root()
+    raw = os.environ.get("KB_SOURCES")
+    if raw:
+        path = Path(os.path.expandvars(raw)).expanduser()
+        if path == workspace / _KB_SOURCES_LEGACY_RELATIVE:
+            return workspace / _KB_SOURCES_RELATIVE
+        return path
+    return workspace / _KB_SOURCES_RELATIVE
+
+
 def load_source_registry() -> SourceRegistry:
     """读 kb-sources.toml(authoring 工具侧真相)→ SourceRegistry。
 
@@ -57,7 +77,7 @@ def load_source_registry() -> SourceRegistry:
     跳过该条;均记 warning。
     """
     log = logging.getLogger(__name__)
-    reg = Path(os.environ.get("KB_SOURCES", str(_KB_SOURCES_DEFAULT))).expanduser()
+    reg = _kb_sources_path()
 
     def _degraded(reason: str) -> SourceRegistry:
         # stdlib logging(非 structlog): PrintLogger 会绑死被 capture 的流, CLI 场景易炸。

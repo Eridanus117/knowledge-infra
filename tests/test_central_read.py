@@ -92,6 +92,21 @@ def test_load_source_repos_fallback_on_missing(
     assert load_source_repos() == DEFAULT_SOURCE_REPOS
 
 
+def test_load_source_repos_rewrites_legacy_default_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    toml = workspace / "knowledge" / "personal" / "rhizome" / "kb-sources.toml"
+    toml.parent.mkdir(parents=True)
+    toml.write_text(
+        f'workspace_root = "{workspace}"\n[[source]]\nname = "alpha"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KB_WORKSPACE_ROOT", str(workspace))
+    monkeypatch.setenv("KB_SOURCES", str(workspace / "rhizome" / "kb-sources.toml"))
+    assert load_source_repos()["alpha"] == workspace / "alpha"
+
+
 def test_load_source_repos_fallback_on_garbage(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
