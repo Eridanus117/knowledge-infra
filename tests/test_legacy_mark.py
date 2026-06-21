@@ -64,16 +64,19 @@ def _patch(monkeypatch) -> None:
     )
 
 
-def test_recall_json_carries_legacy_flag_and_note(monkeypatch) -> None:
+def test_recall_json_carries_legacy_raw_unverified_flags_and_note(monkeypatch) -> None:
     _patch(monkeypatch)
     result = runner.invoke(
         app, ["recall", "q", "--lane", "lexical", "--format", "json"]
     )
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
-    by_key = {h["object_key"]: h["legacy"] for h in payload["hits"]}
-    assert by_key == {"old:d:a": True, "kb:d:b": False}
-    assert any("legacy" in n for n in payload["health"]["notes"])
+    by_key = {
+        h["object_key"]: (h["legacy"], h["raw"], h["unverified"])
+        for h in payload["hits"]
+    }
+    assert by_key == {"old:d:a": (True, True, True), "kb:d:b": (False, False, False)}
+    assert any("legacy/raw" in n for n in payload["health"]["notes"])
 
 
 def test_recall_text_marks_legacy_hit_only(monkeypatch) -> None:
@@ -83,6 +86,6 @@ def test_recall_text_marks_legacy_hit_only(monkeypatch) -> None:
     lines = result.stdout.splitlines()
     old_line = next(ln for ln in lines if "[oldrepo]" in ln)
     new_line = next(ln for ln in lines if "[ekb]" in ln)
-    assert "⚠ legacy 未核验" in old_line
+    assert "⚠ legacy/raw 未核验" in old_line
     assert "legacy" not in new_line
     assert any(ln.startswith("!") and "legacy" in ln for ln in lines)

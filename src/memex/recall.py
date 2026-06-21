@@ -40,8 +40,10 @@ class RecallHit:
     semantic_rank: int | None
     # False = 仅 lexical(无向量, 未索引);None = 未检查/检查失败。
     semantic_indexed: bool | None = None
-    # True = 命中来自 legacy 仓(迁移期, 内容未经实地核验)。
+    # True = 命中来自 legacy/raw 仓(迁移期, 内容未经实地核验)。
     legacy: bool = False
+    raw: bool = False
+    unverified: bool = False
 
 
 @dataclass(frozen=True)
@@ -173,6 +175,7 @@ def recall(  # noqa: C901, PLR0912, PLR0915 — lane 分派(lexical/semantic/hyb
     for h in hits:
         d = docs.get((h.repo, h.object_key))
         sr = getattr(h, "semantic_rank", None)
+        is_legacy = h.repo in legacy_repos
         out.append(
             RecallHit(
                 object_key=h.object_key,
@@ -183,13 +186,17 @@ def recall(  # noqa: C901, PLR0912, PLR0915 — lane 分派(lexical/semantic/hyb
                 lexical_rank=getattr(h, "lexical_rank", None),
                 semantic_rank=sr,
                 semantic_indexed=True if sr is not None else None,
-                legacy=h.repo in legacy_repos,
+                legacy=is_legacy,
+                raw=is_legacy,
+                unverified=is_legacy,
             )
         )
-    # legacy 命中在消费时刻大声标注。
+    # legacy/raw 命中在消费时刻大声标注。
     n_legacy = sum(1 for h in out if h.legacy)
     if n_legacy:
-        notes.append(f"{n_legacy} hit(s) 来自 legacy 仓(未经实地核验) — 以实地核验为准")
+        notes.append(
+            f"{n_legacy} hit(s) 来自 legacy/raw 仓(未经实地核验) — 以实地核验为准"
+        )
 
     # 未索引标注(central + semantic 可用时;降级时 qdrant 状态未知, 不再追打)。
     unindexed = 0

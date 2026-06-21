@@ -10,6 +10,7 @@ from pathlib import Path
 
 from memex.indexing.compile import (
     CompiledDoc,
+    compile_legacy_note,
     compile_note,
     safe_filename,
     write_compiled,
@@ -23,6 +24,7 @@ from memex.indexing.scan import (
     ScanError,
     discover_domains,
     repo_name,
+    scan_legacy_notes,
     scan_notes,
 )
 
@@ -40,7 +42,7 @@ class CompileOutput:
     canonical_repo: str
 
 
-def compile_repo(name: str, repo_root: Path) -> CompileOutput:
+def compile_repo(name: str, repo_root: Path, *, legacy: bool = False) -> CompileOutput:
     """编译一个源仓 → (报告, docs)。仓不可用 / 守卫触发 → 报告携错, 不抛。"""
     repo_root = repo_root.expanduser()
     report = RepoReport(repo=name, repo_path=str(repo_root))
@@ -50,6 +52,9 @@ def compile_repo(name: str, repo_root: Path) -> CompileOutput:
 
     # 规范仓名(worktree 取主 checkout basename);name 是 registry 标签, 仅用于显示。
     repo = repo_name(repo_root)
+
+    if legacy:
+        return _compile_legacy_repo(name, repo_root, repo, report)
 
     try:
         nodes = discover_domains(repo_root)
@@ -93,6 +98,29 @@ def compile_repo(name: str, repo_root: Path) -> CompileOutput:
     report.empty_domains = sorted(
         d for d in report.domains if d not in domains_with_notes
     )
+    return CompileOutput(report=report, docs=docs, canonical_repo=repo)
+
+
+def _compile_legacy_repo(
+    name: str, repo_root: Path, repo: str, report: RepoReport
+) -> CompileOutput:
+    """legacy/raw source 编译路径：无 INDEX/frontmatter 闸门，但低可信标记强制入产物。"""
+    report.domains = ["legacy"]
+    try:
+        scanned = scan_legacy_notes(repo, repo_root)
+    except ScanError as exc:
+        report.duplicate_error = str(exc)
+        return CompileOutput(report=report, docs=[], canonical_repo=repo)
+
+    docs: list[CompiledDoc] = []
+    for note in scanned:
+        result = compile_legacy_note(note, repo_root)
+        assert result.doc is not None
+        docs.append(result.doc)
+
+    report.indexed = len(docs)
+    if not docs:
+        report.empty_domains = ["legacy"]
     return CompileOutput(report=report, docs=docs, canonical_repo=repo)
 
 

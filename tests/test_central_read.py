@@ -307,11 +307,14 @@ def _fake_sync_result(
 
 
 def _registry(
-    repos: dict[str, Path], degraded: bool = False, reason: str | None = None
+    repos: dict[str, Path],
+    degraded: bool = False,
+    reason: str | None = None,
+    legacy: frozenset[str] = frozenset(),
 ):
     from memex.registry import SourceRegistry
 
-    return SourceRegistry(repos=repos, degraded=degraded, reason=reason)
+    return SourceRegistry(repos=repos, degraded=degraded, reason=reason, legacy=legacy)
 
 
 def test_sync_all_continues_and_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -354,6 +357,28 @@ def test_sync_all_green_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:
     result = CliRunner().invoke(sync_cli.app, ["sync-all"])
     assert result.exit_code == 0, result.stdout
     assert "sync-all 汇总" in result.stdout
+
+
+def test_sync_all_passes_legacy_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    from memex.indexing import cli as sync_cli
+
+    calls: list[tuple[str, bool]] = []
+
+    def _fake_sync_repo(name: str, path: Path, **kw: Any):
+        calls.append((name, bool(kw.get("legacy"))))
+        return _fake_sync_result(name)
+
+    monkeypatch.setattr(
+        sync_cli,
+        "load_source_registry",
+        lambda: _registry(
+            {"good": Path("/g"), "old": Path("/o")}, legacy=frozenset({"old"})
+        ),
+    )
+    monkeypatch.setattr("memex.indexing.sync.sync_repo", _fake_sync_repo)
+    result = CliRunner().invoke(sync_cli.app, ["sync-all"])
+    assert result.exit_code == 0, result.stdout
+    assert calls == [("good", False), ("old", True)]
 
 
 def test_sync_all_prune_refused_exits_two(monkeypatch: pytest.MonkeyPatch) -> None:

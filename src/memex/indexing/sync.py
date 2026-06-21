@@ -279,11 +279,12 @@ def sync_repo(  # noqa: C901, PLR0911, PLR0912, PLR0915 — compile→diff→emb
     client: Qdrant | None = None,
     s: Settings = settings,
     mode: SyncMode = _DRY_RUN,
+    legacy: bool = False,
 ) -> tuple[CompileOutput, SyncReport]:
     """compile + qdrant sync 一个源仓。默认 dry-run(零写入, 含不建 collection)。"""
     apply, force = mode.apply, mode.force
     client = client if client is not None else Qdrant(s)
-    out = compile_repo(name, repo_root)
+    out = compile_repo(name, repo_root, legacy=legacy)
     coll = s.central_collection
     report = SyncReport(repo=out.canonical_repo, collection=coll, dry_run=not apply)
 

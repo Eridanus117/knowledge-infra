@@ -224,6 +224,83 @@ def compile_note(note: ScannedNote, repo_root: Path) -> CompileResult:
     )
 
 
+def compile_legacy_note(note: ScannedNote, repo_root: Path) -> CompileResult:
+    """编译 legacy/raw ScannedNote。
+
+    只给 source-level legacy 模式使用：不要求 frontmatter，但会把 compiled doc
+    明确标为 legacy/raw/unverified，避免旧材料被读路径误当成已整理 KB。
+    """
+    raw = note.path.read_text(encoding="utf-8", errors="replace")
+    fm: dict[str, object] | None = None
+    body_text = raw
+    try:
+        fm = parse_frontmatter(raw)
+        split = split_frontmatter(raw)
+        if split is not None:
+            body_text = split[1]
+    except FrontmatterError:
+        fm = None
+    body_text = body_text.strip("\n")
+
+    title = _title(body_text, note)
+    base_description = _str(fm.get("description")) if fm is not None else ""
+    warning = "LEGACY RAW UNVERIFIED: 仅作低可信线索，使用前必须实地核验。"
+    description_tail = base_description or title
+    description = f"{warning} {description_tail}".strip()
+
+    raw_keywords = _str_list(fm.get("keywords")) if fm is not None else []
+    keywords: list[str] = []
+    for kw in [*raw_keywords, "legacy", "raw", "unverified"]:
+        folded = kw.casefold()
+        if folded and folded not in keywords:
+            keywords.append(folded)
+    marked_body = f"{warning}\n\n{body_text}".strip()
+
+    source_hash = _sha256(raw)
+    commit_time = _git_commit_time(repo_root, note.source_path)
+    repo = note.identity.split(":", 1)[0]
+    payload: dict[str, object] = {
+        "identity": note.identity,
+        "repo": repo,
+        "domain": note.node.domain,
+        "domain_prefixes": list(note.node.prefixes),
+        "title": title,
+        "description": description,
+        "keywords": keywords,
+        "kind": DEFAULT_KIND,
+        "kind_explicit": True,
+        "body_text": marked_body,
+        "source_path": note.source_path,
+        "source_hash": source_hash,
+        "commit_time": commit_time,
+        "schema": SCHEMA,
+    }
+    compiled_hash = _sha256(_canonical_json(payload))
+
+    doc = CompiledDoc(
+        identity=note.identity,
+        repo=repo,
+        domain=note.node.domain,
+        domain_prefixes=list(note.node.prefixes),
+        title=title,
+        description=description,
+        keywords=keywords,
+        kind=DEFAULT_KIND,
+        kind_explicit=True,
+        body_text=marked_body,
+        source_path=note.source_path,
+        source_hash=source_hash,
+        compiled_hash=compiled_hash,
+        commit_time=commit_time,
+    )
+    return CompileResult(
+        note=note,
+        doc=doc,
+        skipped_no_frontmatter=False,
+        kind_downgraded_from=None,
+    )
+
+
 _SLUG_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 

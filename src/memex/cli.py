@@ -118,6 +118,8 @@ def recall(
                     "semantic_rank": h.semantic_rank,
                     "semantic_indexed": h.semantic_indexed,
                     "legacy": h.legacy,
+                    "raw": h.raw,
+                    "unverified": h.unverified,
                 }
                 for h in hits
             ],
@@ -132,7 +134,7 @@ def recall(
         typer.echo("(no hits)")
     else:
         for i, h in enumerate(hits, 1):
-            mark = "  ⚠ legacy 未核验" if h.legacy else ""
+            mark = "  ⚠ legacy/raw 未核验" if h.unverified else ""
             typer.echo(
                 f"{i:2}. [{h.repo}] {h.title or h.object_key}  ({h.score:.4f}){mark}"
             )
@@ -166,6 +168,8 @@ def _export_hit_payload(
         "semantic_rank": h.semantic_rank,
         "semantic_indexed": h.semantic_indexed,
         "legacy": h.legacy,
+        "raw": h.raw,
+        "unverified": h.unverified,
         "kind": getattr(d, "kind", "") if d else "",
         "domain_prefixes": list(getattr(d, "domain_prefixes", ())) if d else [],
         "keywords": list(getattr(d, "keywords", ())) if d else [],

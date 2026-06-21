@@ -45,8 +45,10 @@ def _root() -> None:
     """保留子命令名空间(typer 单命令会塌缩, 加 callback 防止)。"""
 
 
-def _resolve_repos(repo_args: list[str] | None) -> tuple[dict[str, Path], str | None]:
-    """--repo name=path ... → ({name: path}, 降级警示)。
+def _resolve_repos(
+    repo_args: list[str] | None,
+) -> tuple[dict[str, Path], frozenset[str], str | None]:
+    """--repo name=path ... → ({name: path}, legacy_names, 降级警示)。
 
     无 --repo 时取 registry 收敛真相;降级(toml 不可用)→ 返回 WARN 文案,
     调用方 echo 进运行输出(M-2: 降级不能只埋日志)。
@@ -58,7 +60,7 @@ def _resolve_repos(repo_args: list[str] | None) -> tuple[dict[str, Path], str | 
             if reg.degraded
             else None
         )
-        return reg.repos, warn
+        return reg.repos, reg.legacy, warn
     out: dict[str, Path] = {}
     for raw in repo_args:
         if "=" not in raw:
@@ -68,7 +70,7 @@ def _resolve_repos(repo_args: list[str] | None) -> tuple[dict[str, Path], str | 
         if not name or not path:
             raise typer.BadParameter(f"--repo name/path 不可为空: {raw!r}")
         out[name] = Path(path).expanduser()
-    return out, None
+    return out, frozenset(), None
 
 
 def _echo_prune(pr: PruneResult, repo: str, out_dir: Path) -> bool:
@@ -106,13 +108,19 @@ def compile_cmd(
     force: bool = typer.Option(
         False, "--force", help="放行 compiled stale mass-delete 守卫(待删 >50%)"
     ),
+    legacy: bool = typer.Option(
+        False,
+        "--legacy",
+        help="把本次 --repo 输入按 legacy/raw/unverified source 编译",
+    ),
 ) -> None:
     """扫源仓 → 编译 kb-note-v1 → 落盘 + stale 清理 + 报告(--dry-run 只报告)。
 
     退出码: 0 全绿 / 2 stale 清理守卫拒绝需人工 --force / 3 内容完整性发现
     (0-doc 仓 / 域内静默 skip)。
     """
-    repos, degraded_warn = _resolve_repos(repo)
+    repos, registry_legacy, degraded_warn = _resolve_repos(repo)
+    legacy_names = frozenset(repos) if legacy else registry_legacy
     if degraded_warn:
         typer.echo(degraded_warn)
     out_dir = out.expanduser() if out is not None else settings.compiled_dir
@@ -122,7 +130,7 @@ def compile_cmd(
     any_needs_force = False
     integ = IntegrityReport()
     for name, path in repos.items():
-        result = compile_repo(name, path)
+        result = compile_repo(name, path, legacy=name in legacy_names)
         typer.echo(result.report.render())
         integ.add_repo(result.report)
         total_indexed += result.report.indexed
@@ -169,6 +177,11 @@ def sync_cmd(
     out: Path = typer.Option(
         None, "--out", help=f"compiled doc 落点(默认 {settings.compiled_dir})"
     ),
+    legacy: bool = typer.Option(
+        False,
+        "--legacy",
+        help="把本次 --repo 输入按 legacy/raw/unverified source 同步",
+    ),
 ) -> None:
     """compile + qdrant sync(两级 reuse + prune 守卫);默认 dry-run 只报告。
 
@@ -177,7 +190,8 @@ def sync_cmd(
     """
     from memex.indexing.sync import SyncMode, sync_repo
 
-    repos, degraded_warn = _resolve_repos(repo)
+    repos, registry_legacy, degraded_warn = _resolve_repos(repo)
+    legacy_names = frozenset(repos) if legacy else registry_legacy
     if degraded_warn:
         typer.echo(degraded_warn)
     out_dir = out.expanduser() if out is not None else settings.compiled_dir
@@ -186,7 +200,12 @@ def sync_cmd(
     any_needs_force = False
     integ = IntegrityReport()
     for name, path in repos.items():
-        c_out, s_rep = sync_repo(name, path, mode=SyncMode(apply=apply, force=force))
+        c_out, s_rep = sync_repo(
+            name,
+            path,
+            mode=SyncMode(apply=apply, force=force),
+            legacy=name in legacy_names,
+        )
         typer.echo(c_out.report.render())
         integ.add_repo(c_out.report)
         typer.echo(s_rep.render())
@@ -244,7 +263,10 @@ def sync_all_cmd(  # noqa: C901, PLR0912, PLR0915 — typer 命令: 选项解析
     for name, path in reg.repos.items():
         try:
             c_out, s_rep = sync_repo(
-                name, path, mode=SyncMode(apply=apply, force=force)
+                name,
+                path,
+                mode=SyncMode(apply=apply, force=force),
+                legacy=name in reg.legacy,
             )
         except Exception as exc:  # 单仓意外崩溃不中断全批(D4)
             summaries.append(f"{name}: CRASH — {exc}")

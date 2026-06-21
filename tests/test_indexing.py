@@ -216,6 +216,35 @@ def test_no_frontmatter_loud_skip(tmp_path: Path) -> None:
     assert "d/plain.md" in skipped
 
 
+def test_legacy_raw_compile_without_index_or_frontmatter(tmp_path: Path) -> None:
+    (tmp_path / "notes" / "plain.md").parent.mkdir(parents=True)
+    (tmp_path / "notes" / "plain.md").write_text(
+        "# Raw note\n\n旧材料正文。\n", encoding="utf-8"
+    )
+    _note(
+        tmp_path / "with-fm.md",
+        "---\ndescription: old desc\nkeywords: [LegacyKW]\n---\n# FM note\nbody\n",
+    )
+    out = compile_repo("legacy-repo", tmp_path, legacy=True)
+    assert out.report.domains == ["legacy"]
+    assert out.report.skipped == []
+    assert out.report.indexed == 2
+
+    raw = next(d for d in out.docs if d.source_path == "notes/plain.md")
+    assert raw.identity == f"{tmp_path.name}:legacy:notes/plain"
+    assert raw.domain == "legacy"
+    assert raw.domain_prefixes == ["legacy"]
+    assert raw.kind == "note"
+    assert raw.kind_explicit is True
+    assert "LEGACY RAW UNVERIFIED" in raw.description
+    assert "LEGACY RAW UNVERIFIED" in raw.body_text
+
+    with_fm = next(d for d in out.docs if d.source_path == "with-fm.md")
+    assert "old desc" in with_fm.description
+    assert "legacykw" in with_fm.keywords
+    assert {"legacy", "raw", "unverified"} <= set(with_fm.keywords)
+
+
 def test_v3_compat_fields(tmp_path: Path) -> None:
     _index(tmp_path / "d" / "INDEX.md")
     v3 = (
