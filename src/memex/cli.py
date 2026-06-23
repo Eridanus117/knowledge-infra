@@ -148,7 +148,7 @@ def recall(
             typer.echo(
                 f"{i:2}. [{h.repo}] {h.title or h.object_key}  ({h.score:.4f}){mark}"
             )
-            typer.echo(f"     {h.object_key}" + (f"  ·  {h.path}" if h.path else ""))
+            typer.echo(f"     {h.object_key}")
             if h.abs_path:
                 typer.echo(f"     → {h.abs_path}")
             if h.preview:

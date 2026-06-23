@@ -6,7 +6,7 @@ build-backend = "uv_build"
 
 [project]
 name = "memex"
-version = "0.1.2"
+version = "0.1.3"
 description = "Local-first KB hybrid retrieval engine (lexical BM25 + semantic qdrant + hybrid RRF)."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -49,6 +49,8 @@ lint = "uvx ruff@0.15.16 check ."
 fmt = "uvx ruff@0.15.16 format ."
 typecheck = "pyrefly check"
 test = "pytest"
+eval = { cmd = "python eval/run_goldset.py", help = "lexical eval-gate: goldset → gold_key@k, 守冻结基线(goldset 走 env KB_EVAL_GOLDSET, 默认 data/personal/kb-eval)" }
+eval-hybrid = { cmd = "python eval/run_goldset.py --lane hybrid --protect --kind-prior", help = "hybrid eval-gate(生产配置=lexical-dependent 保护 + kind prior)" }
 check = { sequence = ["lint", "typecheck", "test"], help = "lint + typecheck + test" }
 freeze = { cmd = "pyinstaller --onefile --clean --name memex src/memex/cli.py", help = "打单文件 binary 到 dist/" }
 

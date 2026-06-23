@@ -12,3 +12,5 @@ htmlcov/
 .env
 AGENTS.md
 CLAUDE.md
+
+eval/results/
