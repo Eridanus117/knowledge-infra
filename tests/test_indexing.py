@@ -231,7 +231,7 @@ def test_legacy_raw_compile_without_index_or_frontmatter(tmp_path: Path) -> None
     assert out.report.indexed == 2
 
     raw = next(d for d in out.docs if d.source_path == "notes/plain.md")
-    assert raw.identity == f"{tmp_path.name}:legacy:notes/plain"
+    assert raw.identity == "legacy-repo:legacy:notes/plain"  # ADR-035: registry name, 不取磁盘 basename
     assert raw.domain == "legacy"
     assert raw.domain_prefixes == ["legacy"]
     assert raw.kind == "note"
@@ -243,6 +243,24 @@ def test_legacy_raw_compile_without_index_or_frontmatter(tmp_path: Path) -> None
     assert "old desc" in with_fm.description
     assert "legacykw" in with_fm.keywords
     assert {"legacy", "raw", "unverified"} <= set(with_fm.keywords)
+
+
+def test_repo_identity_uses_registry_name_not_basename(tmp_path: Path) -> None:
+    """ADR-035 caveat-A 回归防线: 物理目录名(leaf) != registry name 时,
+
+    identity / repo / canonical_repo / 落盘子目录全部用 registry name, 不取磁盘
+    basename。生产名常 name==leaf, 物理数据测不出"读 leaf"的回归 → 必须用
+    name≠leaf 的合成 fixture 钉死。
+    """
+    leaf_dir = tmp_path / "bar"  # 物理 leaf = "bar"
+    _index(leaf_dir / "d" / "INDEX.md")
+    _note(leaf_dir / "d" / "note.md")
+    out = compile_repo("foo", leaf_dir)  # registry name = "foo" ≠ leaf "bar"
+    assert out.canonical_repo == "foo"
+    doc = next(d for d in out.docs if d.source_path == "d/note.md")
+    assert doc.repo == "foo"
+    assert doc.identity == "foo:d:note"
+    assert "bar" not in doc.identity  # 物理 leaf 绝不泄漏进 identity
 
 
 def test_v3_compat_fields(tmp_path: Path) -> None:

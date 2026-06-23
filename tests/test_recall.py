@@ -180,3 +180,58 @@ def test_recall_export_handles_missing_doc(monkeypatch) -> None:
     assert hit["candidate_text"] == "文档模板\n\nkb/a.md"
     assert hit["kind"] == ""
     assert hit["domain_prefixes"] == []
+
+
+def test_recall_abs_path_from_registry(monkeypatch) -> None:
+    # ADR-035 读路径: recall 输出磁盘绝对路径(registry repo 根 + source_path),
+    # agent 召回后可直接 Read。
+    from pathlib import Path
+
+    from memex.registry import SourceRegistry
+
+    monkeypatch.setattr("memex.engine.Engine", _FakeLexical)
+    monkeypatch.setattr("memex.recall._doc_lookup", lambda repo: {})
+    monkeypatch.setattr(
+        "memex.recall.load_source_registry",
+        lambda: SourceRegistry(
+            repos={"myrepo": Path("/ws/myrepo")},
+            degraded=False,
+            reason=None,
+            legacy=frozenset(),
+        ),
+    )
+    result = runner.invoke(
+        app, ["recall", "文档", "--lane", "lexical", "--format", "json"]
+    )
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["hits"][0]["abs_path"] == "/ws/myrepo/kb/a.md"
+    text = runner.invoke(app, ["recall", "文档", "--lane", "lexical"])
+    assert "/ws/myrepo/kb/a.md" in text.stdout  # 文本输出含可直接 Read 的绝对路径行
+
+
+def test_recall_preview_flag(monkeypatch) -> None:
+    # --preview 才填正文摘要片段; 默认不填(保持默认输出紧凑)。
+    from types import SimpleNamespace
+
+    monkeypatch.setattr("memex.engine.Engine", _FakeLexical)
+    monkeypatch.setattr(
+        "memex.recall._doc_lookup",
+        lambda repo: {
+            ("myrepo", "kb:doc:a"): SimpleNamespace(
+                title="文档模板",
+                path="kb/a.md",
+                body="这是正文摘要内容。" * 5,
+                kind_explicit=True,
+            )
+        },
+    )
+    with_p = runner.invoke(
+        app, ["recall", "文档", "--lane", "lexical", "--preview", "--format", "json"]
+    )
+    assert with_p.exit_code == 0, with_p.stdout
+    assert json.loads(with_p.stdout)["hits"][0]["preview"].startswith("这是正文摘要内容")
+    without_p = runner.invoke(
+        app, ["recall", "文档", "--lane", "lexical", "--format", "json"]
+    )
+    assert json.loads(without_p.stdout)["hits"][0]["preview"] == ""

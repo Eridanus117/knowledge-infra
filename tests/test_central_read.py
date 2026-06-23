@@ -344,7 +344,9 @@ def test_sync_all_continues_and_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -
     assert "qdrant 不可达" in result.stdout
 
 
-def test_sync_all_green_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sync_all_green_exits_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     from memex.indexing import cli as sync_cli
 
     monkeypatch.setattr(
@@ -354,12 +356,15 @@ def test_sync_all_green_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:
         "memex.indexing.sync.sync_repo",
         lambda name, path, **kw: _fake_sync_result(name),
     )
-    result = CliRunner().invoke(sync_cli.app, ["sync-all"])
+    # --out 隔离: 退役清理(ADR-035)扫 out_dir, 不碰生产 compiled_dir。
+    result = CliRunner().invoke(sync_cli.app, ["sync-all", "--out", str(tmp_path)])
     assert result.exit_code == 0, result.stdout
     assert "sync-all 汇总" in result.stdout
 
 
-def test_sync_all_passes_legacy_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sync_all_passes_legacy_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     from memex.indexing import cli as sync_cli
 
     calls: list[tuple[str, bool]] = []
@@ -376,7 +381,8 @@ def test_sync_all_passes_legacy_flag(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
     )
     monkeypatch.setattr("memex.indexing.sync.sync_repo", _fake_sync_repo)
-    result = CliRunner().invoke(sync_cli.app, ["sync-all"])
+    # --out 隔离: 退役清理(ADR-035)扫 out_dir, 不碰生产 compiled_dir。
+    result = CliRunner().invoke(sync_cli.app, ["sync-all", "--out", str(tmp_path)])
     assert result.exit_code == 0, result.stdout
     assert calls == [("good", False), ("old", True)]
 

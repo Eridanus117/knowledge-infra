@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,7 +24,6 @@ from memex.indexing.report import (
 from memex.indexing.scan import (
     ScanError,
     discover_domains,
-    repo_name,
     scan_legacy_notes,
     scan_notes,
 )
@@ -33,8 +33,8 @@ from memex.indexing.scan import (
 class CompileOutput:
     """一个 repo 的编译产出: 报告 + 成功编译的 docs(dry-run 时不落盘)。
 
-    canonical_repo = 规范仓名(identity 前缀 + 落盘子目录名), 可能 != registry 标签
-    (worktree 取主 checkout basename)。
+    canonical_repo = repo identity(identity 前缀 + 落盘子目录名)。ADR-035 起
+    = registry 逻辑 name(kb-sources.toml), 与物理目录名/位置解耦。
     """
 
     report: RepoReport
@@ -50,8 +50,9 @@ def compile_repo(name: str, repo_root: Path, *, legacy: bool = False) -> Compile
         report.error = f"repo path not found: {repo_root}"
         return CompileOutput(report=report, docs=[], canonical_repo=name)
 
-    # 规范仓名(worktree 取主 checkout basename);name 是 registry 标签, 仅用于显示。
-    repo = repo_name(repo_root)
+    # ADR-035: repo identity = registry 逻辑 name(kb-sources.toml), 与物理目录名/位置
+    # 解耦。不取磁盘 basename — 仓迁移/改名(leaf≠name)不再改 identity。
+    repo = name
 
     if legacy:
         return _compile_legacy_repo(name, repo_root, repo, report)
@@ -182,3 +183,56 @@ def prune_stale_compiled(
     for name in stale:
         (out_dir / name).unlink()
     return PruneResult(stale=stale, deleted=True)
+
+
+@dataclass
+class RetiredRepoPrune:
+    """整仓退役清理结果(compiled 子目录级)。
+
+    retired = compiled_dir 下不在 active sources 的整个 repo 子目录名;
+    deleted=True 已真删;refused = mass-delete 守卫拒绝文案(>50% 仓目录, 需 --force)。
+    """
+
+    retired: list[str]
+    deleted: bool = False
+    refused: str | None = None
+
+
+def prune_retired_repos(
+    compiled_dir: Path,
+    active_repos: set[str] | frozenset[str],
+    *,
+    apply: bool,
+    force: bool = False,
+) -> RetiredRepoPrune:
+    """清理 <compiled_dir> 下整个退役 repo 子目录(不在 active sources 清单内)。
+
+    prune_stale_compiled 只清「同仓子目录内 scan 之外的单篇」, 覆盖不到「整个 repo
+    改名/退役后旧子目录整体成孤儿」(ADR-035: 物理 leaf→registry name 改名后, 旧 leaf
+    名 compiled 目录无人 scan, 永远不进单篇 prune)。本函数按 active 仓名集合判退役,
+    整目录删。守卫同口径: 待删仓目录 >50% 拒绝(需 force);默认 dry-run(apply=False)。
+
+    active_repos 必须是「全量 registry」的仓名集合 —— 用 --repo 子集调用会把其余仓
+    全判退役, 调用方须只在全量 sync 路径传入。
+    """
+    base = compiled_dir.expanduser()
+    if not base.is_dir():
+        return RetiredRepoPrune(retired=[])
+    existing = sorted(p.name for p in base.iterdir() if p.is_dir())
+    retired = [n for n in existing if n not in active_repos]
+    if not retired:
+        return RetiredRepoPrune(retired=[])
+    if len(retired) * 2 > len(existing) and not force:
+        verb = "将" if not apply else ""
+        return RetiredRepoPrune(
+            retired=retired,
+            refused=(
+                f"compiled 待删整仓目录 {len(retired)} > 现存 {len(existing)} 的 50%, "
+                f"拒绝删除;退役目录{verb}保留, 确认无误后 --force 清理"
+            ),
+        )
+    if not apply:
+        return RetiredRepoPrune(retired=retired)
+    for name in retired:
+        shutil.rmtree(base / name)
+    return RetiredRepoPrune(retired=retired, deleted=True)

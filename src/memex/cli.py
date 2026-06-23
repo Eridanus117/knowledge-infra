@@ -82,6 +82,9 @@ def recall(
         help="hybrid(默认=最佳) | lexical | semantic;远端 embedding 不可用时降 lexical",
     ),
     fmt: str = typer.Option("text", "--format", help="text | json"),
+    preview: bool = typer.Option(
+        False, "--preview", help="每条附正文摘要片段(判相关性用)"
+    ),
 ) -> None:
     """唯一最佳召回入口:hybrid + lexical-dependent protection(评测集上 gold@10 ≈ 0.997)+ title/path 富化。
 
@@ -98,7 +101,12 @@ def recall(
     facets = Facets(domain=domain, kind=kind, tag=tag)
     try:
         res = do_recall(
-            text, limit=limit, repo=repo, lane=lane, facets=facets if facets else None
+            text,
+            limit=limit,
+            repo=repo,
+            lane=lane,
+            facets=facets if facets else None,
+            with_preview=preview,
         )
     except (ValueError, SemanticUnavailable) as exc:
         # SemanticUnavailable 只在显式 --lane semantic 时穿透(点名要 semantic 不降级)。
@@ -113,6 +121,7 @@ def recall(
                     "repo": h.repo,
                     "title": h.title,
                     "path": h.path,
+                    "abs_path": h.abs_path,
                     "score": h.score,
                     "lexical_rank": h.lexical_rank,
                     "semantic_rank": h.semantic_rank,
@@ -120,6 +129,7 @@ def recall(
                     "legacy": h.legacy,
                     "raw": h.raw,
                     "unverified": h.unverified,
+                    "preview": h.preview,
                 }
                 for h in hits
             ],
@@ -139,6 +149,10 @@ def recall(
                 f"{i:2}. [{h.repo}] {h.title or h.object_key}  ({h.score:.4f}){mark}"
             )
             typer.echo(f"     {h.object_key}" + (f"  ·  {h.path}" if h.path else ""))
+            if h.abs_path:
+                typer.echo(f"     → {h.abs_path}")
+            if h.preview:
+                typer.echo(f"     ┄ {h.preview}")
 
 
 def _clip_text(text: str, max_chars: int) -> tuple[str, bool]:

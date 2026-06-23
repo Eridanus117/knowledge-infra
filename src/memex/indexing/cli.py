@@ -21,8 +21,10 @@ from memex.config import settings
 from memex.indexing.integrity import IntegrityReport
 from memex.indexing.pipeline import (
     PruneResult,
+    RetiredRepoPrune,
     compile_repo,
     persist,
+    prune_retired_repos,
     prune_stale_compiled,
 )
 from memex.registry import load_source_registry
@@ -88,6 +90,21 @@ def _echo_prune(pr: PruneResult, repo: str, out_dir: Path) -> bool:
     return False
 
 
+def _echo_retired(rp: RetiredRepoPrune, out_dir: Path) -> bool:
+    """echo 整仓退役清理结果, 返回是否守卫拒绝。"""
+    if rp.refused:
+        typer.echo(f"retired-repo-prune REFUSED: {rp.refused}")
+        return True
+    if rp.retired:
+        verb = "deleted" if rp.deleted else "would delete"
+        typer.echo(
+            f"retired-repo-prune {verb} {len(rp.retired)} 退役仓目录 ← {out_dir}"
+        )
+        for name in rp.retired:
+            typer.echo(f"  - {name}/")
+    return False
+
+
 def _echo_integrity(integ: IntegrityReport) -> None:
     """显眼打印跨仓完整性 section(无发现则静默)。"""
     section = integ.render()
@@ -150,6 +167,11 @@ def compile_cmd(
                 _echo_prune(pr, result.canonical_repo, out_dir) or any_needs_force
             )
         typer.echo("")
+
+    # 整仓退役清理(ADR-035): 仅在全量 registry(无 --repo 子集)且未降级时跑。
+    if not repo and not degraded_warn:
+        rp = prune_retired_repos(out_dir, set(repos), apply=not dry_run, force=force)
+        any_needs_force = _echo_retired(rp, out_dir) or any_needs_force
 
     mode = "dry-run" if dry_run else "compiled"
     tail = "" if dry_run else f", wrote {total_written}"
@@ -296,6 +318,13 @@ def sync_all_cmd(  # noqa: C901, PLR0912, PLR0915 — typer 命令: 选项解析
             failed_repos += 1
         if s_rep.needs_force:
             needs_force.append((name, s_rep.prune_refused or ""))
+
+    # 整仓退役清理(ADR-035): 只在全量 registry 且未降级时跑 —— 降级 fallback 仅含
+    # 内置默认, 会把所有真实 compiled 目录误判退役。
+    if not reg.degraded:
+        rp = prune_retired_repos(out_dir, set(reg.repos), apply=apply, force=force)
+        if _echo_retired(rp, out_dir):
+            needs_force.append(("<retired-repos>", rp.refused or ""))
 
     typer.echo(f"=== sync-all 汇总 [{'apply' if apply else 'dry-run'}] ===")
     if reg.degraded:

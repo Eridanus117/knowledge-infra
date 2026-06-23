@@ -329,7 +329,7 @@ def test_rename_no_h1_note_rekeys_zero_embed(
     )
     assert len(rep.rekeyed) == 1
     assert not rep.embedded and not rep.failures
-    repo = tmp_path.name
+    repo = "repo"  # ADR-035: identity = registry name, 不取磁盘 basename
     assert rep.rekeyed == [f"{repo}:d:new-name"]
     assert rep.pruned == [f"{repo}:d:old-name"]
 
@@ -387,7 +387,7 @@ def test_mass_prune_guard_refuses(
     _index(tmp_path / "d" / "INDEX.md")
     _note(tmp_path / "d" / "a.md")
     fake = FakeQdrant()
-    _seed_ghosts(fake, tmp_path.name, 4)  # canonical repo = tmp basename
+    _seed_ghosts(fake, "repo", 4)  # canonical repo = registry name(ADR-035)
     _, rep = sync_repo(
         "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
     )
@@ -408,7 +408,7 @@ def test_mass_prune_refusal_dry_run_wording(
     _index(tmp_path / "d" / "INDEX.md")
     _note(tmp_path / "d" / "a.md")
     fake = FakeQdrant()
-    _seed_ghosts(fake, tmp_path.name, 4)
+    _seed_ghosts(fake, "repo", 4)
     _, rep = sync_repo(
         "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=False)
     )
@@ -423,7 +423,7 @@ def test_force_allows_mass_prune(
     _index(tmp_path / "d" / "INDEX.md")
     _note(tmp_path / "d" / "a.md")
     fake = FakeQdrant()
-    _seed_ghosts(fake, tmp_path.name, 4)
+    _seed_ghosts(fake, "repo", 4)
     _, rep = sync_repo(
         "repo",
         tmp_path,
@@ -495,7 +495,7 @@ def test_single_doc_failure_continues(
     _index(tmp_path / "d" / "INDEX.md")
     _note(tmp_path / "d" / "a.md")
     _note(tmp_path / "d" / "b.md")
-    repo = tmp_path.name
+    repo = "repo"  # ADR-035: identity = registry name, 不取磁盘 basename
     fake = FailingUpsertQdrant(f"{repo}:d:a")
     # batch=1 → 单篇单 upsert;a 失败不拖垮 INDEX/b
     _, rep = sync_repo(
