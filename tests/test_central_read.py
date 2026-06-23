@@ -317,6 +317,19 @@ def _registry(
     return SourceRegistry(repos=repos, degraded=degraded, reason=reason, legacy=legacy)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_qdrant_retire_prune(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sync-all 编排测试不触碰真生产 qdrant 的退役清理 —— 这些测试验证编排/退出码;
+    qdrant retire-prune 的逻辑由 test_sync.py 的 test_retire_qdrant_* 用 FakeQdrant 专测。
+    不隔离则 prune_retired_qdrant_points 会连真 collection、按 test 小 registry 误判退役。"""
+    from memex.indexing.sync import RetiredQdrantPrune
+
+    monkeypatch.setattr(
+        "memex.indexing.sync.prune_retired_qdrant_points",
+        lambda *a, **k: RetiredQdrantPrune(retired_repos=[], point_count=0),
+    )
+
+
 def test_sync_all_continues_and_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
     from memex.indexing import cli as sync_cli
 

@@ -20,6 +20,7 @@ from memex.indexing.sync import (
     SyncMode,
     build_payload,
     point_id,
+    prune_retired_qdrant_points,
     sync_repo,
 )
 
@@ -587,3 +588,75 @@ def test_kind_explicit_rollout_payload_update_not_embed(
     new_pt = fake.collections["testcoll"]["points"][pid]
     assert new_pt["payload"]["kind_explicit"] is True
     assert new_pt["vector"] == old_vec  # 零 re-embed
+
+
+# ---- prune_retired_qdrant_points (ADR-035 / issue-example) -------------------------
+
+
+def _seed_idy(fake: FakeQdrant, coll: str, specs: list[tuple[str, str]]) -> None:
+    """预置点: (point_id, identity)。"""
+    for pid, idy in specs:
+        fake.seed(coll, pid, [0.0] * DIM, {"identity": idy})
+
+
+def test_retire_qdrant_deletes_inactive_repo_points() -> None:
+    fake = FakeQdrant()
+    _seed_idy(
+        fake,
+        "testcoll",
+        [
+            ("1", "source-alpha:d:a"),
+            ("2", "source-alpha:d:b"),
+            ("3", "source-alpha:d:a"),  # 退役: 旧 leaf
+            ("4", "source-beta:d:x"),  # 退役: 旧 leaf
+            ("5", "rhizome:d:y"),
+        ],
+    )
+    r = prune_retired_qdrant_points(
+        fake, "testcoll", {"source-alpha", "rhizome", "source-beta"}, apply=True
+    )
+    assert r.retired_repos == ["source-beta", "source-alpha"]
+    assert r.point_count == 2
+    assert r.deleted
+    assert set(fake.collections["testcoll"]["points"]) == {"1", "2", "5"}
+
+
+def test_retire_qdrant_dry_run_no_delete() -> None:
+    fake = FakeQdrant()
+    _seed_idy(fake, "testcoll", [("1", "source-alpha:d:a"), ("2", "source-alpha:d:a")])
+    r = prune_retired_qdrant_points(fake, "testcoll", {"source-alpha"}, apply=False)
+    assert r.point_count == 1
+    assert not r.deleted
+    assert set(fake.collections["testcoll"]["points"]) == {"1", "2"}
+
+
+def test_retire_qdrant_mass_guard_refuses_then_force() -> None:
+    fake = FakeQdrant()
+    _seed_idy(
+        fake,
+        "testcoll",
+        [
+            ("1", "old:d:a"),
+            ("2", "old:d:b"),
+            ("3", "old:d:c"),
+            ("4", "source-alpha:d:x"),
+        ],
+    )  # 3 退役 / 4 总 = 75% > 50%
+    r = prune_retired_qdrant_points(fake, "testcoll", {"source-alpha"}, apply=True)
+    assert r.refused is not None
+    assert not r.deleted
+    assert set(fake.collections["testcoll"]["points"]) == {"1", "2", "3", "4"}
+    r2 = prune_retired_qdrant_points(
+        fake, "testcoll", {"source-alpha"}, apply=True, force=True
+    )
+    assert r2.deleted
+    assert r2.point_count == 3
+    assert set(fake.collections["testcoll"]["points"]) == {"4"}
+
+
+def test_retire_qdrant_missing_collection_noop() -> None:
+    fake = FakeQdrant()
+    r = prune_retired_qdrant_points(fake, "nope", {"source-alpha"}, apply=True)
+    assert r.point_count == 0
+    assert not r.deleted
+    assert not r.retired_repos

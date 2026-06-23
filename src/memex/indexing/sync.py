@@ -443,3 +443,77 @@ def sync_repo(  # noqa: C901, PLR0911, PLR0912, PLR0915 — compile→diff→emb
             report.failures.append(("<prune>", str(exc)))
 
     return out, report
+
+
+@dataclass
+class RetiredQdrantPrune:
+    """central collection 里 identity repo 段 ∉ active sources 的退役点清理结果。
+
+    retired_repos = 退役的 repo 段名(去重排序);point_count = 待删/已删点数;
+    deleted=True 已真删;refused = mass-delete 守卫拒绝文案(>50% 总点, 需 --force)。
+    """
+
+    retired_repos: list[str]
+    point_count: int
+    deleted: bool = False
+    refused: str | None = None
+
+
+def prune_retired_qdrant_points(
+    client: Qdrant,
+    collection: str,
+    active_repos: set[str] | frozenset[str],
+    *,
+    apply: bool,
+    force: bool = False,
+) -> RetiredQdrantPrune:
+    """清 central collection 里 identity repo 段 ∉ active sources 的退役点。
+
+    pipeline.prune_retired_repos 的 qdrant 对偶: 改名后旧 identity(如
+    source-alpha:→source-alpha:)的点, 单仓 sync 的 per-repo prune 只按本仓 identity 前缀
+    收窄 scope, 扫不到已退役 repo name 的点 → 永久残留成孤儿(doctor 报
+    compiled_doc_missing)。本函数全量扫 collection, 按 identity 的 repo 段
+    (split ':'[0])判退役整批删。守卫同 prune_retired_repos: 待删 >50% 总点拒绝
+    (需 force);默认 dry-run(apply=False 只报告)。
+
+    active_repos 须「全量 registry」仓名集合 —— 子集会把正常仓误判退役, 调用方须只在
+    全量 sync 路径传入。collection 不存在 → noop。
+    """
+    if not client.collection_exists(collection):
+        return RetiredQdrantPrune(retired_repos=[], point_count=0)
+    retired_ids: list[str] = []
+    retired_repos: set[str] = set()
+    total = 0
+    offset: Any = None
+    while True:
+        points, offset = client.scroll(collection, limit=_SCROLL_PAGE, offset=offset)
+        for p in points:
+            total += 1
+            identity = (p.get("payload") or {}).get("identity", "")
+            repo = identity.split(":", 1)[0] if identity else ""
+            if repo and repo not in active_repos:
+                retired_ids.append(str(p.get("id")))
+                retired_repos.add(repo)
+        if offset is None:
+            break
+    if not retired_ids:
+        return RetiredQdrantPrune(retired_repos=[], point_count=0)
+    if len(retired_ids) > total * _MASS_PRUNE_RATIO and not force:
+        verb = "将" if not apply else ""
+        return RetiredQdrantPrune(
+            retired_repos=sorted(retired_repos),
+            point_count=len(retired_ids),
+            refused=(
+                f"qdrant 待删退役点 {len(retired_ids)} > 现存 {total} 的 50%, "
+                f"拒绝删除;退役点{verb}保留, 确认无误后 --force 清理"
+            ),
+        )
+    result = RetiredQdrantPrune(
+        retired_repos=sorted(retired_repos), point_count=len(retired_ids)
+    )
+    if not apply:
+        return result
+    for batch in batched(retired_ids, _SCROLL_PAGE):
+        client.delete_points(collection, list(batch))
+    result.deleted = True
+    return result

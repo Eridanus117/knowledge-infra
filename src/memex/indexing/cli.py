@@ -272,7 +272,12 @@ def sync_all_cmd(  # noqa: C901, PLR0912, PLR0915 — typer 命令: 选项解析
     退出码: 0 全绿 / 1 任一仓硬失败 / 2 无硬失败但有 prune 拒绝(需人工 --force)/
     3 无 1/2 但有内容完整性发现(日审 cadence 据此告警)。
     """
-    from memex.indexing.sync import SyncMode, sync_repo
+    from memex.indexing.qdrant import Qdrant
+    from memex.indexing.sync import (
+        SyncMode,
+        prune_retired_qdrant_points,
+        sync_repo,
+    )
 
     reg = load_source_registry()
     out_dir = out.expanduser() if out is not None else settings.compiled_dir
@@ -325,6 +330,24 @@ def sync_all_cmd(  # noqa: C901, PLR0912, PLR0915 — typer 命令: 选项解析
         rp = prune_retired_repos(out_dir, set(reg.repos), apply=apply, force=force)
         if _echo_retired(rp, out_dir):
             needs_force.append(("<retired-repos>", rp.refused or ""))
+        # qdrant 侧退役清理(ADR-035 / issue-example): compiled 整目录 prune 的对偶 ——
+        # 改名后旧 identity 的点 per-repo prune scope 不到, 需全量按 repo 段清。
+        qp = prune_retired_qdrant_points(
+            Qdrant(settings),
+            settings.central_collection,
+            set(reg.repos),
+            apply=apply,
+            force=force,
+        )
+        if qp.refused:
+            typer.echo(f"retired-qdrant-prune REFUSED: {qp.refused}")
+            needs_force.append(("<retired-qdrant>", qp.refused))
+        elif qp.point_count:
+            verb = "deleted" if qp.deleted else "would delete"
+            typer.echo(
+                f"retired-qdrant-prune {verb} {qp.point_count} 退役点 "
+                f"(repos: {', '.join(qp.retired_repos)}) ← {settings.central_collection}"
+            )
 
     typer.echo(f"=== sync-all 汇总 [{'apply' if apply else 'dry-run'}] ===")
     if reg.degraded:
