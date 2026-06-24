@@ -13,8 +13,11 @@
 from __future__ import annotations
 
 import json
+import os
+import ssl
 import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from memex.artifacts import INDEX_PROFILE
@@ -53,12 +56,28 @@ class SemanticUnavailable(Exception):
     """
 
 
+def _internal_ssl_context(url: str) -> ssl.SSLContext | None:
+    """Build SSLContext from KB_SEARCH_CA_BUNDLE env var if set."""
+    ca = os.environ.get("KB_SEARCH_CA_BUNDLE")
+    if not ca:
+        return None
+    p = Path(ca).expanduser()
+    if not p.exists():
+        return None
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.load_verify_locations(str(p))
+    return ctx
+
+
 def _post_json(url: str, body: dict[str, Any], timeout: float) -> dict[str, Any]:
     data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"}, method="POST"
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    token = os.environ.get("ORRERY_GATEWAY_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    ctx = _internal_ssl_context(url)
+    with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
         return json.loads(resp.read())
 
 
