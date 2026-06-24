@@ -1,7 +1,7 @@
 [build-system]
 # uv_build: 纯 Python 甜区。命中 C/Rust 扩展 / build hook / VCS 动态版本 /
 # 隐式 namespace 包(无 __init__.py) 任一 → 换 hatchling。
-requires = ["uv_build>=0.11.19,<0.12"]
+requires = ["uv_build>=0.11.24,<0.12"]
 build-backend = "uv_build"
 
 [project]
