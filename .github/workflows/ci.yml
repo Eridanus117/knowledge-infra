@@ -2,7 +2,7 @@ name: CI
 on: [push, pull_request]
 jobs:
   ci:
-    uses: source-gamma/.github/.github/workflows/python-ci.yml@v6
+    uses: source-gamma/.github/.github/workflows/python-ci.yml@v7
     with:
       ruff-extend-ignore: "['TRY003']"
       ruff-extend-per-file-ignores: "{'tests/**'=['ARG']}"
