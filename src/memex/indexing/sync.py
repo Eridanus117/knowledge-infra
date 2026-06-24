@@ -272,7 +272,7 @@ def _find_reusable_vector(
     return vec if isinstance(vec, list) else None
 
 
-def sync_repo(  # noqa: C901, PLR0911, PLR0912, PLR0915 — compile→diff→embed→prune 守卫→落盘的单仓 sync 编排; dry-run/apply/force 多路径耦合, 强拆会割裂事务语义
+def sync_repo(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915 — compile→diff→embed→prune 守卫→落盘的单仓 sync 编排; dry-run/apply/force 多路径耦合, 强拆会割裂事务语义
     name: str,
     repo_root: Path,
     *,

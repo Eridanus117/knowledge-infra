@@ -122,7 +122,7 @@ def _check_semantic_indexed(
     return {key: (pid in found) for pid, key in ids.items()}, None
 
 
-def recall(  # noqa: C901, PLR0912, PLR0915 — lane 分派(lexical/semantic/hybrid)+ facet 校验 + 健康采集编排; 单一检索入口, 拆分会把 lane 路由逻辑打散
+def recall(  # noqa: C901, PLR0912, PLR0913, PLR0915 — lane 分派(lexical/semantic/hybrid)+ facet 校验 + 健康采集编排; 单一检索入口, 拆分会把 lane 路由逻辑打散
     text: str,
     *,
     limit: int = 10,
@@ -187,7 +187,7 @@ def recall(  # noqa: C901, PLR0912, PLR0915 — lane 分派(lexical/semantic/hyb
         is_legacy = h.repo in legacy_repos
         path = getattr(d, "path", "") if d else getattr(h, "path", "")
         root = repo_roots.get(h.repo)
-        abs_path = str((root / path)) if (root is not None and path) else ""
+        abs_path = str(root / path) if (root is not None and path) else ""
         preview = ""
         if with_preview and d is not None:
             body = getattr(d, "body", "") or ""

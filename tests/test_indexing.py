@@ -231,7 +231,9 @@ def test_legacy_raw_compile_without_index_or_frontmatter(tmp_path: Path) -> None
     assert out.report.indexed == 2
 
     raw = next(d for d in out.docs if d.source_path == "notes/plain.md")
-    assert raw.identity == "legacy-repo:legacy:notes/plain"  # ADR-035: registry name, 不取磁盘 basename
+    assert (
+        raw.identity == "legacy-repo:legacy:notes/plain"
+    )  # ADR-035: registry name, 不取磁盘 basename
     assert raw.domain == "legacy"
     assert raw.domain_prefixes == ["legacy"]
     assert raw.kind == "note"

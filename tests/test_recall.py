@@ -230,7 +230,9 @@ def test_recall_preview_flag(monkeypatch) -> None:
         app, ["recall", "文档", "--lane", "lexical", "--preview", "--format", "json"]
     )
     assert with_p.exit_code == 0, with_p.stdout
-    assert json.loads(with_p.stdout)["hits"][0]["preview"].startswith("这是正文摘要内容")
+    assert json.loads(with_p.stdout)["hits"][0]["preview"].startswith(
+        "这是正文摘要内容"
+    )
     without_p = runner.invoke(
         app, ["recall", "文档", "--lane", "lexical", "--format", "json"]
     )

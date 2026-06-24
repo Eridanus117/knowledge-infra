@@ -10,7 +10,7 @@ from memex.indexing.qdrant import Qdrant
 
 
 class _Resp:
-    def __enter__(self) -> "_Resp":
+    def __enter__(self) -> _Resp:
         return self
 
     def __exit__(self, *_args: object) -> None:

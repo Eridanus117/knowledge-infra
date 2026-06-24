@@ -14,6 +14,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+
 def _workspace_root() -> Path:
     return Path(
         os.path.expandvars(

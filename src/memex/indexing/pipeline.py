@@ -103,7 +103,7 @@ def compile_repo(name: str, repo_root: Path, *, legacy: bool = False) -> Compile
 
 
 def _compile_legacy_repo(
-    name: str, repo_root: Path, repo: str, report: RepoReport
+    _name: str, repo_root: Path, repo: str, report: RepoReport
 ) -> CompileOutput:
     """legacy/raw source 编译路径：无 INDEX/frontmatter 闸门，但低可信标记强制入产物。"""
     report.domains = ["legacy"]

@@ -56,7 +56,7 @@ class SemanticUnavailable(Exception):
     """
 
 
-def _internal_ssl_context(url: str) -> ssl.SSLContext | None:
+def _internal_ssl_context(_url: str) -> ssl.SSLContext | None:
     """Build SSLContext from KB_SEARCH_CA_BUNDLE env var if set."""
     ca = os.environ.get("KB_SEARCH_CA_BUNDLE")
     if not ca:
