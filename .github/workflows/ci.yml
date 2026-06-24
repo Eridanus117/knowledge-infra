@@ -2,7 +2,7 @@ name: CI
 on: [push, pull_request]
 jobs:
   ci:
-    uses: source-gamma/.github/.github/workflows/python-ci.yml@v6
+    uses: source-gamma/.github/.github/workflows/python-ci.yml@v7
     with:
       private-deps: true
       ruff-extend-ignore: "['E501','TRY003','RUF001','RUF002']"
