@@ -541,6 +541,29 @@ def _print_domains_compact(tree: list[dict]) -> None:
         print(f"vertical(按需 `rhizome domains <repo>`):{names}")
 
 
+def _domain_status_hint(status: str) -> str:
+    return {
+        "missing-repo": "repo not found at path",
+        "no-domains": "no INDEX.md — add one to define a domain",
+        "not-indexed": "absent from central collection — wait for the sync cadence or run a manual sync",
+    }.get(status, status)
+
+
+def _print_domains_diff(report: list[dict]) -> None:
+    for r in report:
+        st = r["status"]
+        if st != "ok":
+            print(f"{r['name']}: {st} ({_domain_status_hint(st)})")
+            continue
+
+        empties = r["empty_domains"]
+        tail = f"; empty: {empties}" if empties else ""
+        orph = f"; orphan notes: {r['orphan_notes']}" if r["orphan_notes"] else ""
+        print(
+            f"{r['name']}: {r['domains_indexed']}/{len(r['domains_discovered'])} domain(s) indexed{tail}{orph}"
+        )
+
+
 def _cmd_domains(args) -> int:
     try:
         if args.diff:
@@ -548,26 +571,7 @@ def _cmd_domains(args) -> int:
             if args.json:
                 print(json.dumps(report, ensure_ascii=False))
                 return 0
-            for r in report:
-                st = r["status"]
-                if st == "ok":
-                    empties = r["empty_domains"]
-                    tail = f"; empty: {empties}" if empties else ""
-                    orph = (
-                        f"; orphan notes: {r['orphan_notes']}"
-                        if r["orphan_notes"]
-                        else ""
-                    )
-                    print(
-                        f"{r['name']}: {r['domains_indexed']}/{len(r['domains_discovered'])} domain(s) indexed{tail}{orph}"
-                    )
-                else:
-                    hint = {
-                        "missing-repo": "repo not found at path",
-                        "no-domains": "no INDEX.md — add one to define a domain",
-                        "not-indexed": "absent from central collection — wait for the sync cadence or run a manual sync",
-                    }.get(st, st)
-                    print(f"{r['name']}: {st} ({hint})")
+            _print_domains_diff(report)
             return 0
 
         tree = sources.build_tree()
