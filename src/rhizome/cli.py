@@ -578,9 +578,7 @@ def _cmd_domains(args) -> int:
         if args.repo:
             tree = [n for n in tree if n["name"] == args.repo]
             if not tree:
-                print(
-                    f"rhizome domains: unknown source {args.repo!r}", file=sys.stderr
-                )
+                print(f"rhizome domains: unknown source {args.repo!r}", file=sys.stderr)
                 return 2
         if args.json:
             print(json.dumps(tree, ensure_ascii=False))
