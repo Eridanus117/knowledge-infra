@@ -22,7 +22,7 @@ packages = ["src/rhizome"]
 # ruff/pyrefly 不入此组: 走全局 uv tool 装一次 (EDR 友好——各仓 .venv 只剩纯 Python,
 # 不会每个新仓 sync 都拉 Rust 二进制惊动 EDR)。一次性: uv tool install ruff pyrefly
 dev = [
-    "pytest>=8.0",
+    "pytest>=9.1.1",
     "poethepoet",
 ]
 
