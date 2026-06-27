@@ -417,6 +417,32 @@ def sync_repo(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915 — compile→d
         try:
             vectors = embed_texts([doc_embed_text(doc) for doc, _, _ in batch], s)
         except Exception as exc:  # embed 网络/服务错: 整批记失败, 继续下一批
+            if len(batch) > 1:
+                report.notes.append(
+                    f"embed batch {len(batch)} 失败, 已逐篇重试: {exc}"
+                )
+                for doc, pid, payload in batch:
+                    try:
+                        vec = embed_texts([doc_embed_text(doc)], s)[0]
+                    except Exception as single_exc:
+                        report.embedded.remove(doc.identity)
+                        report.failures.append((doc.identity, f"embed: {single_exc}"))
+                        continue
+                    try:
+                        client.upsert(
+                            coll,
+                            [
+                                {
+                                    "id": pid,
+                                    "vector": {VECTOR_FIELD: vec},
+                                    "payload": payload,
+                                }
+                            ],
+                        )
+                    except QdrantError as upsert_exc:
+                        report.embedded.remove(doc.identity)
+                        report.failures.append((doc.identity, f"upsert: {upsert_exc}"))
+                continue
             for ident in idents:
                 report.embedded.remove(ident)
                 report.failures.append((ident, f"embed: {exc}"))

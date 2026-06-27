@@ -530,6 +530,32 @@ def test_embed_failure_recorded_continues(
     assert all("embed" in err for _, err in rep.failures)
 
 
+def test_embed_batch_failure_falls_back_to_single_docs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[int] = []
+
+    def _batch_fails(texts: list[str], s: Any = None) -> list[list[float]]:
+        calls.append(len(texts))
+        if len(texts) > 1:
+            raise OSError("gateway timeout")
+        return _fake_embed(texts, s)
+
+    monkeypatch.setattr("memex.indexing.sync.embed_texts", _batch_fails)
+    _index(tmp_path / "d" / "INDEX.md")
+    _note(tmp_path / "d" / "a.md")
+    _note(tmp_path / "d" / "b.md")
+    fake = FakeQdrant()
+    _, rep = sync_repo(
+        "repo", tmp_path, client=fake, s=_settings(), mode=SyncMode(apply=True)
+    )
+    assert calls == [3, 1, 1, 1]
+    assert not rep.failures
+    assert len(rep.embedded) == 3
+    assert len(fake.collections["testcoll"]["points"]) == 3
+    assert any("逐篇重试" in n for n in rep.notes)
+
+
 class DownQdrant(FakeQdrant):
     def collection_exists(self, name: str) -> bool:
         raise QdrantError("connection refused")
