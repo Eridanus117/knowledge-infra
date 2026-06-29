@@ -372,6 +372,35 @@ def test_sync_all_green_exits_zero(
     # --out 隔离: 退役清理(ADR-035)扫 out_dir, 不碰生产 compiled_dir。
     result = CliRunner().invoke(sync_cli.app, ["sync-all", "--out", str(tmp_path)])
     assert result.exit_code == 0, result.stdout
+    assert ">>> sync-all good  (/g)" in result.stdout
+    assert "sync-all 汇总" in result.stdout
+
+
+def test_sync_all_qdrant_retire_error_reports_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from memex.indexing import cli as sync_cli
+    from memex.indexing.qdrant import QdrantError
+
+    monkeypatch.setattr(
+        sync_cli, "load_source_registry", lambda: _registry({"good": Path("/g")})
+    )
+    monkeypatch.setattr(
+        "memex.indexing.sync.sync_repo",
+        lambda name, path, **kw: _fake_sync_result(name),
+    )
+
+    def _raise_qdrant(*_a: Any, **_kw: Any):
+        raise QdrantError("GET /collections/c: dns")
+
+    monkeypatch.setattr(
+        "memex.indexing.sync.prune_retired_qdrant_points", _raise_qdrant
+    )
+    result = CliRunner().invoke(sync_cli.app, ["sync-all", "--out", str(tmp_path)])
+    assert result.exit_code == 1, result.stdout
+    assert "retired-qdrant-prune ERROR" in result.stdout
+    assert "总失败清单" in result.stdout
+    assert "<retired-qdrant>" in result.stdout
     assert "sync-all 汇总" in result.stdout
 
 
