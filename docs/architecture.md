@@ -1,7 +1,9 @@
 ---
 description: memex 引擎级 codemap:读路径(recall/hybrid/lexical/semantic/planner)、写路径(indexing 子包)、registry/config、核心不变量与改某类东西去哪。
-keywords: [memex, architecture, codemap, recall, indexing]
+keywords: [memex, architecture, codemap, recall, indexing, current-state-model, snapshot@2026-06-30, anchor]
 kind: reference
+links: [governance-control-view]
+code: [src/memex/cli.py, src/memex/recall.py, src/memex/hybrid.py, src/memex/semantic.py, src/memex/indexing/sync.py, src/memex/indexing/compile.py, src/memex/config.py, src/memex/registry.py]
 ---
 
 # memex 架构
@@ -22,6 +24,37 @@ script:`memex`(读)、`memex-sync`(写)。
 
 两路由一个 **flag `read_from_central`**(默认 True)汇合:读路径据它决定从中央 compiled/collection
 读、还是从 legacy `.legacy-index` artifact + per-root collection 读(用于从旧索引产物迁移)。
+
+### 鸟瞰图(System Context · C4 L1)
+
+> **Viewpoint**: System Context——把 memex 引擎当一个系统,画它与外部 actor(agent/人、<service-manager>)、数据源(源仓 notes)、依赖服务(embedding/qdrant)、本地产物(compiled/telemetry)的边界与数据流。读/写两路径在引擎内,经 `read_from_central` flag 汇合。
+> **真相源 & correspondence**: 节点对应下文 §2 模块地图,源指针见 frontmatter `code:`;图从模块关系投影,非独立真相。
+
+```mermaid
+flowchart TB
+  agent["Agent / 人<br/>crux recall(读)"]
+  ld["<service-manager> kb-central-sync<br/>每 30min 触发(写)"]
+  notes["源仓 KB notes<br/>via kb-sources.toml registry"]
+  subgraph memex["memex 引擎 · local-first 混合检索"]
+    rd["读路径 memex<br/>recall / hybrid / lexical / semantic"]
+    wr["写路径 memex-sync<br/>compile → sync"]
+  end
+  embed["embedding 服务<br/>:3002 qwen3-embedding-8b"]
+  qd["qdrant<br/>kb_central_qwen3_v1"]
+  comp["compiled 目录<br/>~/.local/share/memex/compiled"]
+  tel["telemetry ledger<br/>本地 SQLite"]
+  agent -->|"query"| rd
+  rd -->|"top-k 富化召回"| agent
+  rd --> embed
+  rd --> qd
+  rd --> comp
+  rd -.->|"best-effort"| tel
+  ld --> wr
+  notes --> wr
+  wr --> comp
+  wr --> embed
+  wr --> qd
+```
 
 ## 2. 模块地图 codemap
 
@@ -102,7 +135,7 @@ planner(`planner.py`)做确定性 query 语言分类:中文低锚 = 有 CJK 且�
 4. **point_id 含 unit-mode**(`sync.py`):`point_id = uuid5(固定 namespace, identity + ":" + unit-mode)`。`POINT_NAMESPACE` 由稳定字面量派生,改它 = 全库 re-key,禁动;collection 内 mode 必须一致(`_assert_unit_mode`),切 chunk = 显式整库重建,禁增量混跑。
 5. **embed 超时设长防队列雪崩**(`config.py` `embed_timeout_secs`):单线程 embedding 服务端首建慢,客户端短超时会遗弃请求、服务端继续磨被弃请求 → 队列雪崩。长超时等待远比制造遗弃便宜。
 6. **可索引性闸门**:有 frontmatter ⟺ 可索引,无 → loud-skip(进报告,不静默)。compiled doc 损坏单文件 skip 不拖垮整仓。
-7. **identity 位置派生**:identity = `<repo>:<domain>:<slug>`,文件移动/改域层级 = identity 变(删旧建新),无 uuid、无手写 key;`repo_name` 在 worktree 下取主 checkout basename(防同一 note 在 worktree 拿到不同 identity)。
+7. **identity 位置派生**:identity = `<repo>:<domain>:<slug>`,文件移动/改域层级 = identity 变(删旧建新),无 uuid、无手写 key;worktree 下 identity 前缀由 registry 逻辑名(`name` 入参)固定、不取物理目录名(ADR-035,`pipeline.py` `repo = name`);旧 `scan.py:repo_name()` helper 现无调用点(勿当主路径)。
 8. **不复用 legacy per-root collection**:写路径只操作中央 `central_collection`(全新 collection),`Qdrant` client 绝不触碰 legacy per-root 产物。
 9. **telemetry 不影响命令**:`memex` 每次调用 best-effort 落 ledger,不改命令退出码(`$KB_SEARCH_TELEMETRY_OFF`/`DO_NOT_TRACK` 关闭)。
 
