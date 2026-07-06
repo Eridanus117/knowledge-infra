@@ -1,3 +1,11 @@
+---
+description: "rhizome CLI 的理解导向概览：解释去中心 Markdown 知识、note/domain/identity/frontmatter、new/check 写入门禁、frozen 边界与工具心智模型。"
+keywords: [rhizome, overview, CLI, note, domain, identity, frontmatter, new, check, frozen]
+kind: reference
+links: [architecture]
+code: [src/rhizome]
+---
+
 # rhizome 概览
 
 > 讲 rhizome 怎么运作、为什么这么设计(理解导向)。要跑起来 → [README](../README.md);要改代码 → [architecture](architecture.md)。本文不讲安装、不列字段清单。

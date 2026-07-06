@@ -123,6 +123,17 @@ FORBIDDEN_FIELDS = KILLED_FIELDS | DERIVED_FIELDS
 # slug = filename = identity tail; keep it predictable (lowercase kebab).
 _SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
+# Slugs only locate/distinguish; semantics belong in description/keywords and
+# humans read the domain INDEX (kb-note-contract §3, org-contract D5-D7).
+SLUG_WORDS_SHOULD_MAX = 6
+_ADR_PREFIX_RE = re.compile(r"^adr-\d+-")
+
+
+def slug_excess_words(topic: str) -> int:
+    """Words beyond the SHOULD cap, ignoring an `adr-NNN-` prefix; 0 if fine."""
+    rest = _ADR_PREFIX_RE.sub("", topic.strip())
+    return max(0, len(rest.split("-")) - SLUG_WORDS_SHOULD_MAX)
+
 
 class ContractError(ValueError):
     """A field or value violates the §存 contract."""
@@ -273,7 +284,7 @@ def derive_domain(domain_dir: Path, repo_root: Path) -> str:
     if domain in ("", "."):
         raise ContractError(
             "INDEX.md at repo root is not a domain; domains are subdirectories "
-            "(see contracts/kb-source-repository-contract.md)"
+            "(see docs/architecture.md)"
         )
     return domain
 

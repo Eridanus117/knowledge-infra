@@ -23,6 +23,7 @@
 | `rhizome domains` | 列出所有源仓及其域树。 |
 | `rhizome domains --diff` | 与 Qdrant 中心集合对账，看哪些 domain 尚未索引。 |
 | `rhizome adopt <repo>` | 一键纳管一个仓：写 registry 行 + INDEX 骨架 + lefthook 门禁。 |
+| `rhizome capture <text>` | 低摩擦闪念捕获：一行带时间戳 append 到 inbox（raw、出 KB 边界、不索引），之后 triage 进 `new`/source-beta。默认 `~/.config/rhizome/inbox.md`，`$RHIZOME_INBOX` 可覆盖。 |
 
 ## 安装
 

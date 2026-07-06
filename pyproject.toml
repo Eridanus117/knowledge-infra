@@ -5,11 +5,18 @@ description = "Rhizome — decentralized KB authoring and validation CLI (frontm
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Eridanus" }]
-requires-python = ">=3.11"
-dependencies = []
+requires-python = ">=3.12"
+dependencies = [
+    "gnomon",
+]
 
 [project.scripts]
-rhizome = "rhizome.cli:main"
+rhizome = "rhizome.cli:run"
+
+# gnomon = shared per-invocation SQLite telemetry core for source-gamma tools.
+# Pin a public GitHub commit so clean-room CI does not depend on local tags.
+[tool.uv.sources]
+gnomon = { git = "https://github.com/source-gamma/gnomon.git", rev = "1e949bcd22cdfd1f2459dbf43b7f6f03ab31d781" }
 
 [build-system]
 requires = ["hatchling"]
@@ -19,22 +26,24 @@ build-backend = "hatchling.build"
 packages = ["src/rhizome"]
 
 [dependency-groups]
-# ruff/pyrefly 不入此组: 走全局 uv tool 装一次 (EDR 友好——各仓 .venv 只剩纯 Python,
-# 不会每个新仓 sync 都拉 Rust 二进制惊动 EDR)。一次性: uv tool install ruff pyrefly
+# ruff/pyrefly are installed through uvx in local checks and the shared CI,
+# keeping the project environment focused on runtime/test dependencies.
 dev = [
-    "pytest>=9.1.1",
+    "pytest>=8.0",
     "poethepoet",
 ]
 
 [tool.poe.tasks]
 lint = "uvx ruff@0.15.16 check ."
 fmt = "uvx ruff@0.15.16 format ."
-typecheck = "pyrefly check"
+typecheck = "uv run --with pyrefly==1.0.0 pyrefly check"
 test = "pytest"
 check = { sequence = ["lint", "typecheck", "test"], help = "lint + typecheck + test" }
 
-# Canonical ruff rules live in source-gamma/.github/ruff.toml (applied by CI).
-# Only repo-specific overrides are declared here; passed to CI via workflow inputs.
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
 [tool.ruff.lint]
 # TRY003: this CLI deliberately raises domain exceptions (SourcesError,
 #   ContractError, AdoptError) with f-string diagnostics at the raise site;
@@ -44,6 +53,9 @@ extend-ignore = ["TRY003"]
 [tool.ruff.lint.extend-per-file-ignores]
 # ARG: test doubles mirror real signatures without using all params — normal pytest idiom.
 "tests/**" = ["ARG"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

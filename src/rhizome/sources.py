@@ -80,9 +80,11 @@ def _workspace_root() -> Path:
 
 
 def load_source_entries(registry: Path | None = None) -> list[dict]:
-    """Return [{name, path, surface}, ...]; KB_WORKSPACE_ROOT overrides the base.
+    """Return [{name, path, surface, legacy}, ...]; KB_WORKSPACE_ROOT overrides the base.
 
     `surface` is the compact-map tier ("core" | "vertical", default "vertical");
+    `legacy` marks raw/unverified read-only sources whose hits need trust
+    calibration at recall time and should not be treated as normal KB sources;
     see `_DEFAULT_SURFACE`. This is the full parse; `load_sources` is the
     (name, path) view kept for the indexer / diff / recall callers.
     """
@@ -117,7 +119,14 @@ def load_source_entries(registry: Path | None = None) -> list[dict]:
                 f"source {name!r}: invalid surface {surface!r} "
                 f"({'|'.join(_VALID_SURFACES)})"
             )
-        out.append({"name": name, "path": path, "surface": surface})
+        out.append(
+            {
+                "name": name,
+                "path": path,
+                "surface": surface,
+                "legacy": entry.get("legacy") is True,
+            }
+        )
     if not out:
         raise SourcesError(f"{reg}: no [[source]] entries")
     return out
@@ -259,6 +268,7 @@ def build_tree(registry: Path | None = None) -> list[dict]:
             "name": e["name"],
             "path": str(path),
             "surface": e["surface"],
+            "legacy": bool(e.get("legacy")),
             "exists": path.is_dir(),
             "domains": [],
         }

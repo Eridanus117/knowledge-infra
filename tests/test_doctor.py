@@ -57,11 +57,15 @@ class TestDoctor(unittest.TestCase):
         reg.write_text(f'workspace_root = "{ws}"\n', encoding="utf-8")
         return ws, reg
 
-    def _source(self, reg: Path, name: str, repo: Path | None = None) -> None:
+    def _source(
+        self, reg: Path, name: str, repo: Path | None = None, *, legacy: bool = False
+    ) -> None:
         text = reg.read_text(encoding="utf-8").rstrip("\n") + "\n\n"
         text += f'[[source]]\nname = "{name}"\n'
         if repo is not None:
             text += f'path = "{repo}"\n'
+        if legacy:
+            text += "legacy = true\n"
         reg.write_text(text, encoding="utf-8")
 
     def _repo(
@@ -101,6 +105,36 @@ class TestDoctor(unittest.TestCase):
             for r in report["sources"]:
                 self.assertTrue(r["ok"])
                 self.assertEqual({c["status"] for c in r["checks"]}, {doctor.PASS})
+
+    # ---- domain-capacity guidance (ADR-044) ---------------------------------
+
+    def _fill_domain(self, repo: Path, domain: str, n: int) -> None:
+        d = repo / domain
+        d.mkdir(parents=True, exist_ok=True)
+        if not (d / "INDEX.md").exists():
+            (d / "INDEX.md").write_text(_INDEX, encoding="utf-8")
+        for i in range(n):
+            (d / f"note-{i}.md").write_text("# n\n", encoding="utf-8")
+
+    def test_domain_capacity_warns_without_failing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            repo = self._repo(ws, "alpha")
+            self._fill_domain(repo, "docs", doctor.DOMAIN_CAPACITY_GUIDE + 1)
+            self._fill_domain(repo, "docs/sub", 1)  # owned by the sub-domain
+            self._fill_domain(repo, "decisions", doctor.DOMAIN_CAPACITY_GUIDE + 5)
+            self._source(reg, "alpha")
+            report = doctor.run_doctor(registry=reg, which=_which)
+            self.assertTrue(report["ok"])  # WARN never flips ok
+            row = report["sources"][0]
+            self.assertTrue(row["ok"])
+            cap = next(c for c in row["checks"] if c["check"] == "domain-capacity")
+            self.assertEqual(cap["status"], doctor.WARN)
+            self.assertIn(
+                f"docs ({doctor.DOMAIN_CAPACITY_GUIDE + 1} notes)", cap["detail"]
+            )
+            self.assertNotIn("decisions", cap["detail"])  # ADR archive exempt
+            self.assertNotIn("docs/sub", cap["detail"])  # under guide
 
     def test_precommit_framework_gate_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -231,6 +265,30 @@ class TestDoctor(unittest.TestCase):
             ok = {r["name"]: r["ok"] for r in report["sources"]}
             self.assertEqual(ok, {"good": True, "bad": False})
 
+    def test_legacy_source_skips_gate_and_index_checks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            self._repo(ws, "normal")
+            legacy = self._repo(ws, "legacy", gate=None, domain=None)
+            (legacy / "raw-note.md").write_text("# raw\n", encoding="utf-8")
+            self._source(reg, "normal")
+            self._source(reg, "legacy", legacy=True)
+            report = doctor.run_doctor(registry=reg, which=_which)
+            self.assertTrue(report["ok"])
+            self.assertEqual(
+                [r["name"] for r in report["sources"]], ["normal", "legacy"]
+            )
+            row = report["sources"][1]
+            self.assertTrue(row["legacy"])
+            self.assertEqual(
+                {c["check"] for c in row["checks"]},
+                {"repo-exists", "legacy-source"},
+            )
+            self.assertEqual({c["status"] for c in row["checks"]}, {doctor.PASS})
+            self.assertIn(
+                "INDEX checks intentionally skipped", row["checks"][1]["detail"]
+            )
+
     # ---- CLI wiring ---------------------------------------------------------
 
     def test_cli_exit_nonzero_on_fail(self):
@@ -276,7 +334,7 @@ class TestDoctor(unittest.TestCase):
             self.assertEqual([r["name"] for r in report["sources"]], ["alpha"])
             self.assertEqual(
                 {c["check"] for c in report["sources"][0]["checks"]},
-                {"gate-present", "gate-resolvable", "index-present"},
+                {"gate-present", "gate-resolvable", "index-present", "domain-capacity"},
             )
             self.assertIn("gate_resolvable", report)
 

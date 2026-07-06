@@ -1,0 +1,43 @@
+language: en-US
+tone_instructions: "Be concise, concrete, and focus on correctness, security, tests, and maintainability."
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  review_status: true
+  review_details: false
+  commit_status: true
+  fail_commit_status: false
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: true
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+  related_issues: false
+  related_prs: false
+  suggested_labels: false
+  prompt_for_ai_agents: true
+  path_filters:
+    - "!*.egg-info/**"
+    - "!**/__pycache__/**"
+    - "src/**"
+    - "tests/**"
+    - "docs/**"
+    - ".github/**"
+    - "pyproject.toml"
+    - "README.md"
+    - "SECURITY.md"
+    - "lefthook.yml"
+  path_instructions:
+    - path: "src/**"
+      instructions: |
+        Treat README.md and docs/architecture.md as the source of truth for CLI behavior, frontmatter validation, domain discovery, and relocation behavior. Flag visible behavior changes that do not update tests and docs.
+    - path: "tests/**"
+      instructions: |
+        Prefer tests that exercise note authoring, validation, registry discovery, relocation, and capture behavior through temporary directories. Do not introduce tests that depend on real local registry data or real workspace paths.
+    - path: ".github/**"
+      instructions: |
+        Keep workflow permissions minimal, pin actions to commit SHAs, and avoid introducing secrets into pull_request workflows.
+        Prefer scanner CLIs over actions that require repository secrets or organization-level commercial licenses.

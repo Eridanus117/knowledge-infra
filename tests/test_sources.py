@@ -69,20 +69,29 @@ class TestRegistry(unittest.TestCase):
         ):
             sources.load_sources(Path(tmp) / "nope.toml")
 
-    def test_load_source_entries_surface_tag_and_default(self):
-        # surface tags the compact-map tier; omitting it defaults to "vertical".
+    def test_load_source_entries_surface_and_legacy_flags(self):
+        # surface tags the compact-map tier; legacy marks raw/unverified sources.
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             reg = base / "kb-sources.toml"
             reg.write_text(
                 f'workspace_root = "{base}"\n'
                 '[[source]]\nname = "core-kb"\nsurface = "core"\n'
-                '[[source]]\nname = "vert-kb"\n'  # no surface → default vertical
+                '[[source]]\nname = "legacy-kb"\nlegacy = true\n'
+                '[[source]]\nname = "vert-kb"\n'  # omitted flags → defaults
             )
             entries = sources.load_source_entries(reg)
             self.assertEqual(
                 [(e["name"], e["surface"]) for e in entries],
-                [("core-kb", "core"), ("vert-kb", "vertical")],
+                [
+                    ("core-kb", "core"),
+                    ("legacy-kb", "vertical"),
+                    ("vert-kb", "vertical"),
+                ],
+            )
+            self.assertEqual(
+                [(e["name"], e["legacy"]) for e in entries],
+                [("core-kb", False), ("legacy-kb", True), ("vert-kb", False)],
             )
 
     def test_invalid_surface_raises(self):
