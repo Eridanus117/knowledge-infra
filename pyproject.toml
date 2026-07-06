@@ -29,7 +29,7 @@ packages = ["src/rhizome"]
 # ruff/pyrefly are installed through uvx in local checks and the shared CI,
 # keeping the project environment focused on runtime/test dependencies.
 dev = [
-    "pytest>=8.0",
+    "pytest>=9.1.1",
     "poethepoet",
 ]
 
