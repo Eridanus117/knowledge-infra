@@ -8,6 +8,7 @@ authors = [{ name = "Eridanus" }]
 requires-python = ">=3.12"
 dependencies = [
     "gnomon",
+    "orrery-heartbeat @ git+https://github.com/source-gamma/orrery-heartbeat.git",
 ]
 
 [project.scripts]

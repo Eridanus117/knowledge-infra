@@ -26,6 +26,11 @@ wheels = [
 ]
 
 [[package]]
+name = "orrery-heartbeat"
+version = "0.1.0"
+source = { git = "https://github.com/source-gamma/orrery-heartbeat.git#fff4587e279275f6c452891f6bb34fb537543cc3" }
+
+[[package]]
 name = "packaging"
 version = "26.2"
 source = { registry = "https://pypi.org/simple" }
@@ -142,6 +147,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "gnomon" },
+    { name = "orrery-heartbeat" },
 ]
 
 [package.dev-dependencies]
@@ -151,7 +157,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "gnomon", git = "https://github.com/source-gamma/gnomon.git?rev=1e949bcd22cdfd1f2459dbf43b7f6f03ab31d781" }]
+requires-dist = [
+    { name = "gnomon", git = "https://github.com/source-gamma/gnomon.git?rev=1e949bcd22cdfd1f2459dbf43b7f6f03ab31d781" },
+    { name = "orrery-heartbeat", git = "https://github.com/source-gamma/orrery-heartbeat.git" },
+]
 
 [package.metadata.requires-dev]
 dev = [

@@ -34,6 +34,8 @@ from .telemetry import STDERR_CAP, STDOUT_CAP, Tee
 
 
 class CliError(Exception):
+
+from orrery_heartbeat import check_update
     """User-facing CLI failure (bad path, existing file, no domain, ...)."""
 
 
@@ -1039,6 +1041,7 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911 — top-level c
 
 
 def run() -> None:
+    check_update("rhizome", "source-gamma/rhizome")
     """Console-script entry: run the CLI under per-invocation telemetry capture.
 
     rhizome is argparse (not Typer/Click), so it can't use
