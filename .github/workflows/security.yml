@@ -60,27 +60,6 @@ jobs:
       - name: Audit workflows
         run: uvx "zizmor==1.26.1" --min-severity medium --min-confidence medium --format github --collect=all .github
 
-  gitleaks:
-    name: Gitleaks
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Install Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
-        with:
-          go-version: "1.25.x"
-
-      - name: Scan for secrets
-        run: go run github.com/zricethezav/gitleaks/v8@v8.30.0 detect --source . --no-banner --redact --exit-code 1
-
   trufflehog:
     name: TruffleHog
     runs-on: ubuntu-latest

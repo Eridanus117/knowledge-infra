@@ -23,19 +23,18 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import __version__
+from orrery_heartbeat import check_update
+
+from . import __version__, check, contract, doctor, sources, telemetry
 from . import adopt as adopt_mod
 from . import amend as amend_mod
 from . import capture as capture_mod
 from . import relocate as relocate_mod
-from . import check, contract, doctor, sources, telemetry
 from .contract import ContractError
 from .telemetry import STDERR_CAP, STDOUT_CAP, Tee
 
 
 class CliError(Exception):
-
-from orrery_heartbeat import check_update
     """User-facing CLI failure (bad path, existing file, no domain, ...)."""
 
 

@@ -19,6 +19,9 @@ rhizome = "rhizome.cli:run"
 [tool.uv.sources]
 gnomon = { git = "https://github.com/source-gamma/gnomon.git", rev = "1e949bcd22cdfd1f2459dbf43b7f6f03ab31d781" }
 
+[tool.hatch.metadata]
+allow-direct-references = true
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
