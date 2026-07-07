@@ -242,7 +242,7 @@ class TestNewBodyInput(unittest.TestCase):
         args = argparse.Namespace(body_file=None)
         with tempfile.TemporaryDirectory() as tmp:
             bf = Path(tmp) / "body.md"
-            bf.write_text("# Title\n\n$X `code` )unbalanced( — CJK\uff0c标点\n")
+            bf.write_text("# Title\n\n$X `code` )unbalanced( — CJK，标点\n")
             args.body_file = str(bf)
             self.assertEqual(_read_new_body(args), bf.read_text())
 
@@ -364,13 +364,13 @@ class TestDomainHints(unittest.TestCase):
     def test_domain_doubling_suggests_bare_domain(self):
         # agent prepends the repo name to a repo-relative --domain
         with tempfile.TemporaryDirectory() as tmp:
-            root = self._repo(Path(tmp), "example-kb", ("docs",))
+            root = self._repo(Path(tmp), "source-delta", ("docs",))
             with self.assertRaises(CliError) as ctx:
                 run_new(
                     "x",
                     description="d",
                     keywords=["a"],
-                    domain="example-kb/docs",
+                    domain="source-delta/docs",
                     body="x",
                     cwd=root,
                 )

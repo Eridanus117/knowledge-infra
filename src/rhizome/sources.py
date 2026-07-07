@@ -79,6 +79,30 @@ def _workspace_root() -> Path:
     ).expanduser()
 
 
+def _find_local_overlay(registry: Path) -> Path | None:
+    """Sibling .local.toml for machine-specific overrides (gitignored)."""
+    local = registry.with_name(registry.stem + ".local.toml")
+    return local if local.is_file() else None
+
+
+def _load_local_overrides(registry: Path) -> dict[str, dict]:
+    """Load local overlay; returns {name: {field: value}} for patch-merge."""
+    local = _find_local_overlay(registry)
+    if local is None:
+        return {}
+    try:
+        data = tomllib.loads(local.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise SourcesError(f"{local}: {exc}") from exc
+    overrides: dict[str, dict] = {}
+    for entry in data.get("source", []):
+        name = entry.get("name")
+        if not name:
+            continue
+        overrides[name] = {k: v for k, v in entry.items() if k != "name"}
+    return overrides
+
+
 def load_source_entries(registry: Path | None = None) -> list[dict]:
     """Return [{name, path, surface, legacy}, ...]; KB_WORKSPACE_ROOT overrides the base.
 
@@ -129,6 +153,25 @@ def load_source_entries(registry: Path | None = None) -> list[dict]:
         )
     if not out:
         raise SourcesError(f"{reg}: no [[source]] entries")
+    # Apply machine-local overrides (kb-sources.local.toml sibling).
+    overrides = _load_local_overrides(reg)
+    if overrides:
+        by_name = {e["name"]: e for e in out}
+        for oname, ofields in overrides.items():
+            if oname not in by_name:
+                continue
+            target = by_name[oname]
+            if "path" in ofields:
+                target["path"] = Path(ofields["path"]).expanduser()
+            if "surface" in ofields:
+                s = ofields["surface"]
+                if s not in _VALID_SURFACES:
+                    raise SourcesError(
+                        f"local override for {oname!r}: invalid surface {s!r}"
+                    )
+                target["surface"] = s
+            if "legacy" in ofields:
+                target["legacy"] = ofields["legacy"] is True
     return out
 
 

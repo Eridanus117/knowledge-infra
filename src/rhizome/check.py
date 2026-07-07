@@ -354,9 +354,7 @@ def frozen_gate_findings(path: Path, text: str) -> list[Finding]:
     ]
 
 
-def _relocate_exempt(  # noqa: PLR0911
-    repo_root: Path, op: str, parts: list[str], head: str
-) -> bool:
+def _relocate_exempt(repo_root: Path, op: str, parts: list[str], head: str) -> bool:
     """True iff this staged D/R of a frozen doc is an audited, content-preserving
     relocate (`rhizome relocate`), not an illicit delete or a smuggled edit.
 
@@ -407,16 +405,11 @@ def _relocate_exempt(  # noqa: PLR0911
             return False
         return relocate.content_hash(tgt_text) == relocate.content_hash(head)
     # within-repo: prove the relocated copy is staged here, byte-for-byte.
-    rename_new_path_index = 2
-    new_rel = (
-        parts[rename_new_path_index]
-        if op == "R" and len(parts) > rename_new_path_index
-        else rec["new_rel"]
-    )
+    new_rel = parts[2] if op == "R" and len(parts) > 2 else rec["new_rel"]
     staged = _git_staged_text(repo_root, new_rel)
-    return staged is not None and relocate.content_hash(
-        staged
-    ) == relocate.content_hash(head)
+    return staged is not None and relocate.content_hash(staged) == relocate.content_hash(
+        head
+    )
 
 
 def staged_frozen_findings(repo_root: Path) -> list[Finding]:  # noqa: C901 — single git-diff parse loop with guard clauses; not decomposable without sharing state.

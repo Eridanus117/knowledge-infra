@@ -80,11 +80,9 @@ class TestCaptureCli(unittest.TestCase):
     def test_cli_stdin(self):
         with tempfile.TemporaryDirectory() as tmp:
             inbox = Path(tmp) / "inbox.md"
-            with (
-                mock.patch.dict(os.environ, {"RHIZOME_INBOX": str(inbox)}),
-                mock.patch("sys.stdin", io.StringIO("piped thought\n")),
-            ):
-                rc = main(["capture"])
+            with mock.patch.dict(os.environ, {"RHIZOME_INBOX": str(inbox)}):
+                with mock.patch("sys.stdin", io.StringIO("piped thought\n")):
+                    rc = main(["capture"])
             self.assertEqual(rc, 0)
             self.assertIn("piped thought", inbox.read_text(encoding="utf-8"))
 
@@ -92,11 +90,9 @@ class TestCaptureCli(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             inbox = Path(tmp) / "inbox.md"
             buf = io.StringIO()
-            with (
-                mock.patch.dict(os.environ, {"RHIZOME_INBOX": str(inbox)}),
-                mock.patch("sys.stdout", buf),
-            ):
-                rc = main(["capture", "--json", "hi"])
+            with mock.patch.dict(os.environ, {"RHIZOME_INBOX": str(inbox)}):
+                with mock.patch("sys.stdout", buf):
+                    rc = main(["capture", "--json", "hi"])
             self.assertEqual(rc, 0)
             payload = json.loads(buf.getvalue())
             self.assertEqual(payload["text"], "hi")

@@ -284,7 +284,7 @@ def derive_domain(domain_dir: Path, repo_root: Path) -> str:
     if domain in ("", "."):
         raise ContractError(
             "INDEX.md at repo root is not a domain; domains are subdirectories "
-            "(see docs/architecture.md)"
+            "(see contracts/kb-source-repository-contract.md)"
         )
     return domain
 

@@ -1,6 +1,6 @@
 """Make the suite hermetic against the host environment.
 
-The `rhizome` launcher and local developer shells may export KB_*/RHIZOME_*
+The `rhizome` launcher and the agent session shell export KB_*/RHIZOME_*
 config-override vars (KB_SOURCES, KB_WORKSPACE_ROOT, …). The production code
 reads those as overrides by design, so when they leak into the test process
 they hijack the temp registries the tests build — `load_sources` /

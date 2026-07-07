@@ -336,5 +336,35 @@ class TestCaseInsensitiveDiscovery(unittest.TestCase):
             )
 
 
+class TestLocalOverlay(unittest.TestCase):
+    def test_local_overlay_patches_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            _repo(base, "my-kb")
+            reg = _registry(base, ["my-kb"])
+            local = base / "kb-sources.local.toml"
+            local.write_text('[[source]]\nname = "my-kb"\npath = "/override/path"\n')
+            got = sources.load_sources(reg)
+            self.assertEqual(got[0][1], Path("/override/path"))
+
+    def test_local_overlay_unknown_name_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            _repo(base, "my-kb")
+            reg = _registry(base, ["my-kb"])
+            local = base / "kb-sources.local.toml"
+            local.write_text('[[source]]\nname = "no-such-kb"\npath = "/x"\n')
+            got = sources.load_sources(reg)
+            self.assertEqual(got[0][1], base / "my-kb")
+
+    def test_no_local_overlay_is_noop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            _repo(base, "my-kb")
+            reg = _registry(base, ["my-kb"])
+            got = sources.load_sources(reg)
+            self.assertEqual(got[0][1], base / "my-kb")
+
+
 if __name__ == "__main__":
     unittest.main()

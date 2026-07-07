@@ -23,11 +23,12 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import __version__, check, contract, doctor, sources, telemetry
+from . import __version__
 from . import adopt as adopt_mod
 from . import amend as amend_mod
 from . import capture as capture_mod
 from . import relocate as relocate_mod
+from . import check, contract, doctor, sources, telemetry
 from .contract import ContractError
 from .telemetry import STDERR_CAP, STDOUT_CAP, Tee
 
@@ -100,7 +101,7 @@ def run_new(  # noqa: C901 — one keyword arg per KB frontmatter/content field;
                 f"no {contract.INDEX_FILENAME} found from {cwd} up to repo root; "
                 f"create an {contract.INDEX_FILENAME} to define the domain, or pass "
                 f"--domain{_domain_hint(repo_root)} "
-                f"(see docs/architecture.md)"
+                f"(see contracts/kb-source-repository-contract.md)"
             )
 
     # C2 node-chain口径 : the identity must match what the central
@@ -109,7 +110,7 @@ def run_new(  # noqa: C901 — one keyword arg per KB frontmatter/content field;
     if not domain_path:
         raise CliError(
             f"{contract.INDEX_FILENAME} at repo root is not a domain; domains are "
-            "subdirectories (see docs/architecture.md)"
+            "subdirectories (see contracts/kb-source-repository-contract.md)"
         )
     identity = contract.derive_identity(
         contract.repo_name(repo_root), domain_path, topic
@@ -146,7 +147,7 @@ def _domain_hint(repo_root: Path, tried: str | None = None) -> str:
     """A parenthesized did-you-mean tail naming the repo's real domains.
 
     `--domain` is repo-relative and agents routinely mis-guess it (pass a
-    workspace-relative path, or prepend the repo name -> `example-kb/example-kb/docs`).
+    workspace-relative path, or prepend the repo name → `source-delta/source-delta/docs`).
     Listing the repo's actual domains — and a close match for `tried` — turns a
     dead-end error into a fix. Best-effort: a discovery failure yields no tail.
 
@@ -734,7 +735,7 @@ def _print_domains_compact(tree: list[dict]) -> None:
         print(f"vertical(按需 `rhizome domains <repo>`):{names}")
 
 
-def _cmd_domains(args) -> int:  # noqa: C901
+def _cmd_domains(args) -> int:
     try:
         if args.diff:
             report = sources.diff()
@@ -944,7 +945,7 @@ def _cmd_amend(args) -> int:
     return 0
 
 
-def _print_relocate_move(entry: dict, *, applied: bool) -> None:
+def _print_relocate_move(entry: dict, *, applied: bool) -> None:  # noqa: C901 — flat impact-report printer; branches are independent report lines.
     plan = entry["plan"]
     head = "relocated" if applied else "relocate (dry-run)"
     print(f"{head}: {plan['old_rel']}")
@@ -1042,7 +1043,7 @@ def run() -> None:
 
     rhizome is argparse (not Typer/Click), so it can't use
     gnomon.run_instrumented's in-process Click wrapper — it uses the `record`
-    posture, owning the capture loop here.
+    posture, owning the capture loop here (mirrors source-beta.cli.run_wrapped).
     Telemetry is best-effort and must NEVER change the command's exit code.
 
     `main()` stays a pure dispatcher (tests call it directly); everything
@@ -1062,7 +1063,7 @@ def run() -> None:
 
     try:
         is_tty = sys.stdout.isatty()
-    except Exception:
+    except Exception:  # noqa: BLE001 — isatty can raise on odd streams; default false
         is_tty = False
 
     # gnomon's Tee passes writes through to the real stream first and wraps all
@@ -1080,7 +1081,7 @@ def run() -> None:
         exit_code = (
             exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — any fault → clean error line + recorded row, never a traceback + lost telemetry
         print(f"rhizome: {exc}", file=sys.stderr)
         err_msg = str(exc)
         exit_code = 1

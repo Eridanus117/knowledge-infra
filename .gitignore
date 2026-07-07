@@ -16,3 +16,5 @@ mermaid-validator/node_modules/
 *.log
 AGENTS.md
 CLAUDE.md
+kb-sources.local.toml
+.repo-release-gate.local.toml

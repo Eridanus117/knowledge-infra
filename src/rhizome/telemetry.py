@@ -5,9 +5,9 @@ All schema / connect / record / stats / Tee / cap constants live in the shared
 be unioned for cross-tool analysis). This module re-exports the public surface
 rhizome callers expect, binding rhizome's Cfg once so call sites don't pass it.
 
-rhizome is an argparse CLI (not Typer/Click), so it uses the `record` posture:
-`cli.run()` owns the capture loop itself rather than
-gnomon.run_instrumented's in-process Click wrapper. Only
+rhizome is an argparse CLI (not Typer/Click), so it uses the `record` posture —
+`cli.run()` owns the capture loop itself (mirrors source-beta.cli.run_wrapped) rather
+than gnomon.run_instrumented's in-process Click wrapper. Only
 record/stats/db_path/connect/Tee/caps are needed here.
 """
 
