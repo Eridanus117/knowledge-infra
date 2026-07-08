@@ -107,7 +107,7 @@ def is_relocate_recorded(repo_root: Path, old_rel: str, chash: str) -> bool:
     return find_record(repo_root, old_rel, chash) is not None
 
 
-def append_ledger(
+def append_ledger(  # noqa: PLR0913
     repo_root: Path,
     *,
     chash: str,
@@ -298,10 +298,10 @@ def parse_target(spec: str) -> tuple[str, str, str | None]:
     nor slug contains ``:``, so a plain split is unambiguous.
     """
     parts = spec.split(":")
-    if len(parts) == 2:
+    if len(parts) == 2:  # noqa: PLR2004
         repo, domain = parts
         slug: str | None = None
-    elif len(parts) == 3:
+    elif len(parts) == 3:  # noqa: PLR2004
         repo, domain, slug = parts
     else:
         raise RelocateUsageError(
@@ -386,7 +386,7 @@ class RelocatePlan:
         }
 
 
-def plan_relocate(
+def plan_relocate(  # noqa: C901, PLR0912, PLR0915
     source: str, to: str, *, cwd: Path, registry: Path | None = None
 ) -> RelocatePlan:
     """Build a RelocatePlan for one note. Pure (no disk writes). Raises
@@ -605,7 +605,7 @@ def load_batch(plan_path: Path) -> list[dict]:
     return out
 
 
-def run_relocate(
+def run_relocate(  # noqa: PLR0913
     *,
     source: str | None = None,
     to: str | None = None,

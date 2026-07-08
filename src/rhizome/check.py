@@ -70,7 +70,7 @@ class Finding:
         return f"{self.severity}: {loc}{self.message}"
 
 
-def check_text(text: str) -> list[Finding]:
+def check_text(text: str) -> list[Finding]:  # noqa: C901, PLR0912
     """Validate one note's raw text; return findings (possibly empty)."""
     try:
         fm = contract.parse_frontmatter(text)
@@ -354,7 +354,7 @@ def frozen_gate_findings(path: Path, text: str) -> list[Finding]:
     ]
 
 
-def _relocate_exempt(repo_root: Path, op: str, parts: list[str], head: str) -> bool:
+def _relocate_exempt(repo_root: Path, op: str, parts: list[str], head: str) -> bool:  # noqa: PLR0911
     """True iff this staged D/R of a frozen doc is an audited, content-preserving
     relocate (`rhizome relocate`), not an illicit delete or a smuggled edit.
 
@@ -405,14 +405,14 @@ def _relocate_exempt(repo_root: Path, op: str, parts: list[str], head: str) -> b
             return False
         return relocate.content_hash(tgt_text) == relocate.content_hash(head)
     # within-repo: prove the relocated copy is staged here, byte-for-byte.
-    new_rel = parts[2] if op == "R" and len(parts) > 2 else rec["new_rel"]
+    new_rel = parts[2] if op == "R" and len(parts) > 2 else rec["new_rel"]  # noqa: PLR2004
     staged = _git_staged_text(repo_root, new_rel)
     return staged is not None and relocate.content_hash(
         staged
     ) == relocate.content_hash(head)
 
 
-def staged_frozen_findings(repo_root: Path) -> list[Finding]:
+def staged_frozen_findings(repo_root: Path) -> list[Finding]:  # noqa: C901
     """Repo-level: ERROR on staged delete/rename of a HEAD-frozen KB note.
 
     Per-file checks never see deletions (the path is gone from {staged_files}),
@@ -556,7 +556,7 @@ def mermaid_blocks(text: str) -> list[tuple[int, str]]:
     return blocks
 
 
-def mermaid_findings(text: str) -> list[Finding]:
+def mermaid_findings(text: str) -> list[Finding]:  # noqa: PLR0911
     blocks = mermaid_blocks(text)
     if not blocks:
         return []

@@ -103,7 +103,7 @@ def _load_local_overrides(registry: Path) -> dict[str, dict]:
     return overrides
 
 
-def load_source_entries(registry: Path | None = None) -> list[dict]:
+def load_source_entries(registry: Path | None = None) -> list[dict]:  # noqa: C901, PLR0912
     """Return [{name, path, surface, legacy}, ...]; KB_WORKSPACE_ROOT overrides the base.
 
     `surface` is the compact-map tier ("core" | "vertical", default "vertical");

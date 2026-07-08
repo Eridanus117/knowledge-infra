@@ -44,7 +44,7 @@ def _split_csv(value: str | None) -> list[str]:
     return [part.strip() for part in value.split(",") if part.strip()]
 
 
-def run_new(
+def run_new(  # noqa: C901
     topic: str,
     *,
     description: str,
@@ -594,7 +594,7 @@ def _staged_frozen_results() -> tuple[dict[str, list], bool]:
     return {"<staged-frozen>": findings}, True
 
 
-def _cmd_check(args) -> int:
+def _cmd_check(args) -> int:  # noqa: C901, PLR0912
     # --duplicate-domains / --staged-frozen are repo-level, not per-file; they
     # may run standalone (no paths) as the commit-hook repo guard, or alongside
     # the per-file checks (e.g. with --all).
@@ -736,7 +736,7 @@ def _print_domains_compact(tree: list[dict]) -> None:
         print(f"vertical(按需 `rhizome domains <repo>`):{names}")
 
 
-def _cmd_domains(args) -> int:
+def _cmd_domains(args) -> int:  # noqa: C901
     try:
         if args.diff:
             report = sources.diff()
@@ -1015,7 +1015,7 @@ def _cmd_relocate(args) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911
     args = _build_parser().parse_args(argv)
     if args.command == "new":
         return _cmd_new(args)

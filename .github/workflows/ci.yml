@@ -16,5 +16,5 @@ jobs:
   ci:
     uses: source-gamma/.github/.github/workflows/python-ci.yml@77c7ac691d7da788412915d81ad5ac498187d179 # v8
     with:
-      ruff-extend-ignore: "['TRY003','RUF001','C901','PLR0911','PLR0912','PLR0913','PLR0915','PLR2004','SIM117']"
+      ruff-extend-ignore: "['TRY003','RUF001']"
       ruff-extend-per-file-ignores: "{'tests/**'=['ARG']}"

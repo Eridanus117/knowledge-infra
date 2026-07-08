@@ -285,7 +285,7 @@ def count_stray_md(repo_root: Path) -> int:
     return n
 
 
-def run_adopt(
+def run_adopt(  # noqa: C901, PLR0912, PLR0913, PLR0915
     repo_arg: str,
     *,
     description: str | None = None,
