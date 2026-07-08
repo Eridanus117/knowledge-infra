@@ -44,7 +44,7 @@ def _split_csv(value: str | None) -> list[str]:
     return [part.strip() for part in value.split(",") if part.strip()]
 
 
-def run_new(  # noqa: C901 — one keyword arg per KB frontmatter/content field; arity is irreducible domain shape, not accidental.
+def run_new(
     topic: str,
     *,
     description: str,
@@ -594,7 +594,7 @@ def _staged_frozen_results() -> tuple[dict[str, list], bool]:
     return {"<staged-frozen>": findings}, True
 
 
-def _cmd_check(args) -> int:  # noqa: C901, PLR0912 — argparse subcommand dispatcher; branches map flag combinations to output modes.
+def _cmd_check(args) -> int:
     # --duplicate-domains / --staged-frozen are repo-level, not per-file; they
     # may run standalone (no paths) as the commit-hook repo guard, or alongside
     # the per-file checks (e.g. with --all).
@@ -946,7 +946,7 @@ def _cmd_amend(args) -> int:
     return 0
 
 
-def _print_relocate_move(entry: dict, *, applied: bool) -> None:  # noqa: C901 — flat impact-report printer; branches are independent report lines.
+def _print_relocate_move(entry: dict, *, applied: bool) -> None:
     plan = entry["plan"]
     head = "relocated" if applied else "relocate (dry-run)"
     print(f"{head}: {plan['old_rel']}")
@@ -1015,7 +1015,7 @@ def _cmd_relocate(args) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911 — top-level command router; one return per subcommand dispatch.
+def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.command == "new":
         return _cmd_new(args)
@@ -1065,7 +1065,7 @@ def run() -> None:
 
     try:
         is_tty = sys.stdout.isatty()
-    except Exception:  # noqa: BLE001 — isatty can raise on odd streams; default false
+    except Exception:
         is_tty = False
 
     # gnomon's Tee passes writes through to the real stream first and wraps all
@@ -1083,7 +1083,7 @@ def run() -> None:
         exit_code = (
             exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
         )
-    except Exception as exc:  # noqa: BLE001 — any fault → clean error line + recorded row, never a traceback + lost telemetry
+    except Exception as exc:
         print(f"rhizome: {exc}", file=sys.stderr)
         err_msg = str(exc)
         exit_code = 1

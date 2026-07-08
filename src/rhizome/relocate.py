@@ -388,7 +388,7 @@ class RelocatePlan:
 
 def plan_relocate(
     source: str, to: str, *, cwd: Path, registry: Path | None = None
-) -> RelocatePlan:  # noqa: C901, PLR0915 — one linear resolve→validate→survey pass; branches are guard clauses.
+) -> RelocatePlan:
     """Build a RelocatePlan for one note. Pure (no disk writes). Raises
     RelocateUsageError (exit 2) / RelocateError (exit 1) / ContractError."""
     src = Path(source).expanduser()

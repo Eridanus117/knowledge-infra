@@ -30,11 +30,7 @@ FROZEN_ADR = (
     "---\n# ADR\n\ndecided\n"
 )
 NOTE = (
-    "---\n"
-    "description: a living note\n"
-    "keywords: [n]\n"
-    "kind: note\n"
-    "---\n# Note\n\nbody\n"
+    "---\ndescription: a living note\nkeywords: [n]\nkind: note\n---\n# Note\n\nbody\n"
 )
 INDEX = "---\ndescription: d\nkeywords: [x]\nkind: index\n---\n# dom\n"
 
@@ -179,7 +175,9 @@ class TestRelocateFrozen(_RegistryCase):
         before = relocate.content_hash(FROZEN_ADR)
         relocate.apply_relocate(plan)
         dest = self.src / "archive" / "adr-1.md"
-        self.assertEqual(relocate.content_hash(dest.read_text(encoding="utf-8")), before)
+        self.assertEqual(
+            relocate.content_hash(dest.read_text(encoding="utf-8")), before
+        )
         self.assertEqual(relocate.read_ledger(self.src)[0]["content_hash"], before)
 
     def test_frozen_with_uncommitted_edit_refused(self):
@@ -268,7 +266,9 @@ class TestSlugRenameRewrite(_RegistryCase):
         )
         frozen_ref = self.src / "docs" / "frozen.md"
         frozen_ref.write_text(
-            FROZEN_ADR.replace("kind: decision\n", "kind: decision\nlinks: [old-slug]\n"),
+            FROZEN_ADR.replace(
+                "kind: decision\n", "kind: decision\nlinks: [old-slug]\n"
+            ),
             encoding="utf-8",
         )
         plan = relocate.plan_relocate(

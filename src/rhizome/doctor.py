@@ -135,7 +135,7 @@ def _domain_note_counts(repo_root: Path) -> list[tuple[str, int]]:
     ancestor domain, so files under a sub-domain never count for the parent."""
     infos = sources.discover_domains(repo_root)
     dirs = {Path(i["index_path"]).resolve().parent: i["domain"] for i in infos}
-    counts = {name: 0 for name in dirs.values()}
+    counts = dict.fromkeys(dirs.values(), 0)
     for ddir, dname in dirs.items():
         for p in ddir.rglob("*.md"):
             if p.name == contract.INDEX_FILENAME or ".git" in p.parts:

@@ -285,7 +285,7 @@ def count_stray_md(repo_root: Path) -> int:
     return n
 
 
-def run_adopt(  # noqa: C901, PLR0912, PLR0915, PLR0913 — single convergence flow (each adopt option is a real, independent input); splitting would scatter the once-through ordering.
+def run_adopt(
     repo_arg: str,
     *,
     description: str | None = None,

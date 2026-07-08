@@ -370,7 +370,7 @@ def _flow_list(items: list[str]) -> str:
     return "[" + ", ".join(_flow_item(x) for x in items) + "]"
 
 
-def render_frontmatter(  # noqa: PLR0913 — one keyword arg per emitted frontmatter field; arity mirrors the contract.
+def render_frontmatter(
     *,
     description: str,
     keywords: list[str],
@@ -503,7 +503,7 @@ def _strip_comment(s: str) -> str:
     return "".join(out).strip()
 
 
-def parse_frontmatter(text: str) -> dict | None:  # noqa: C901 — hand-rolled minimal YAML scanner; branches are the grammar cases.
+def parse_frontmatter(text: str) -> dict | None:
     """Parse a note's frontmatter into a flat dict, or None if no frontmatter.
 
     Raises ContractError on unterminated frontmatter. Handles flow lists
@@ -565,7 +565,7 @@ def parse_frontmatter(text: str) -> dict | None:  # noqa: C901 — hand-rolled m
     return out
 
 
-def strip_fields(text: str, remove: frozenset[str]) -> tuple[str, list[str]]:  # noqa: C901, PLR0912 — line-by-line frontmatter rewriter; branches handle each YAML line shape.
+def strip_fields(text: str, remove: frozenset[str]) -> tuple[str, list[str]]:
     """Remove the given top-level frontmatter keys (with their continuation
     lines) from a note, preserving every other line and the body VERBATIM.
 

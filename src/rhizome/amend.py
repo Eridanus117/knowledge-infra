@@ -70,7 +70,7 @@ def _working_tree_differs(repo_root: Path, rel: str) -> bool:
     return bool(proc.stdout.strip())
 
 
-def run_amend(file_arg: str, *, reason: str, cwd: Path | None = None) -> dict:  # noqa: C901 — linear validate→commit sequence; branches are guard clauses, not nesting.
+def run_amend(file_arg: str, *, reason: str, cwd: Path | None = None) -> dict:
     """Commit an audited in-place edit of one frozen doc. Pure-ish (no printing).
 
     Returns {file, repo, rel, reason, commit, ledger}. Raises AmendUsageError

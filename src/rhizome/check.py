@@ -70,7 +70,7 @@ class Finding:
         return f"{self.severity}: {loc}{self.message}"
 
 
-def check_text(text: str) -> list[Finding]:  # noqa: C901, PLR0912 — flat per-field validation cascade; each branch is an independent frontmatter rule.
+def check_text(text: str) -> list[Finding]:
     """Validate one note's raw text; return findings (possibly empty)."""
     try:
         fm = contract.parse_frontmatter(text)
@@ -407,12 +407,12 @@ def _relocate_exempt(repo_root: Path, op: str, parts: list[str], head: str) -> b
     # within-repo: prove the relocated copy is staged here, byte-for-byte.
     new_rel = parts[2] if op == "R" and len(parts) > 2 else rec["new_rel"]
     staged = _git_staged_text(repo_root, new_rel)
-    return staged is not None and relocate.content_hash(staged) == relocate.content_hash(
-        head
-    )
+    return staged is not None and relocate.content_hash(
+        staged
+    ) == relocate.content_hash(head)
 
 
-def staged_frozen_findings(repo_root: Path) -> list[Finding]:  # noqa: C901 — single git-diff parse loop with guard clauses; not decomposable without sharing state.
+def staged_frozen_findings(repo_root: Path) -> list[Finding]:
     """Repo-level: ERROR on staged delete/rename of a HEAD-frozen KB note.
 
     Per-file checks never see deletions (the path is gone from {staged_files}),
@@ -556,7 +556,7 @@ def mermaid_blocks(text: str) -> list[tuple[int, str]]:
     return blocks
 
 
-def mermaid_findings(text: str) -> list[Finding]:  # noqa: PLR0911 — early returns are distinct fast-exit gates (no fence / unclosed / each diagram-type check).
+def mermaid_findings(text: str) -> list[Finding]:
     blocks = mermaid_blocks(text)
     if not blocks:
         return []
