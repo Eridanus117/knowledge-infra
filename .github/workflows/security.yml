@@ -33,11 +33,22 @@ jobs:
       - name: Install Python
         run: uv python install 3.12
 
-      - name: Install locked runtime dependencies
-        run: uv sync --locked --no-dev
+      - name: Export locked runtime requirements
+        run: |
+          uv export \
+            --format requirements-txt \
+            --locked \
+            --no-dev \
+            --no-emit-project \
+            --no-header \
+            --output-file requirements-audit.txt \
+            >/dev/null
 
-      - name: Audit installed runtime dependencies
-        run: uv run --with "pip-audit==2.10.1" pip-audit --local
+      - name: Filter git dependencies
+        run: grep -v '@ git+' requirements-audit.txt > requirements-audit-filtered.txt || true
+
+      - name: Audit runtime dependencies
+        run: uv run --with "pip-audit==2.10.1" pip-audit -r requirements-audit-filtered.txt --disable-pip --no-deps
 
   actions-audit:
     name: GitHub Actions audit
@@ -59,6 +70,20 @@ jobs:
 
       - name: Audit workflows
         run: uvx "zizmor==1.26.1" --min-severity medium --min-confidence medium --format github --collect=all .github
+
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan for leaked secrets
+        run: go run github.com/zricethezav/gitleaks/v8@v8.30.0 detect --source . --no-banner --redact --exit-code 1
 
   trufflehog:
     name: TruffleHog
