@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   ci:
-    uses: source-gamma/.github/.github/workflows/python-ci.yml@77c7ac691d7da788412915d81ad5ac498187d179 # v8
+    uses: source-gamma/.github/.github/workflows/python-ci.yml@58e94252df4b455f1b6890ca5a8b400b3688ba81 # v9
     with:
       ruff-extend-ignore: "['TRY003','RUF001']"
       ruff-extend-per-file-ignores: "{'tests/**'=['ARG']}"
