@@ -6,4 +6,4 @@ Reference implementation of the §存 frontmatter contract.
 and downstream indexers import from it.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

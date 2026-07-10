@@ -1,6 +1,6 @@
 [project]
 name = "rhizome"
-version = "0.1.0"
+version = "0.1.1"
 description = "Rhizome — decentralized KB authoring and validation CLI (frontmatter contract + domain tree)"
 readme = "README.md"
 license = { text = "MIT" }
@@ -8,7 +8,7 @@ authors = [{ name = "Eridanus" }]
 requires-python = ">=3.12"
 dependencies = [
     "gnomon",
-    "orrery-heartbeat @ git+https://github.com/source-gamma/orrery-heartbeat.git@3eb8b4c4d5855e8da9f59f4456adfc5b38d262e8",
+    "orrery-heartbeat @ git+https://github.com/source-gamma/orrery-heartbeat.git@2eb9141389416e529aaa8ac7c7a744cae2efd3e8",
 ]
 
 [project.scripts]
