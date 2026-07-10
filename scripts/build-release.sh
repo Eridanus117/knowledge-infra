@@ -22,7 +22,7 @@ mkdir -p "${OUTPUT_DIR}" "${BUILD_DIR}/dist" "${BUILD_DIR}/work" "${BUILD_DIR}/s
 
 uv run --group freeze pyinstaller \
   --noconfirm \
-  --onefile \
+  --onedir \
   --clean \
   --paths "${ROOT}/src" \
   --collect-submodules rhizome \
@@ -33,13 +33,12 @@ uv run --group freeze pyinstaller \
   --specpath "${BUILD_DIR}/spec" \
   "${ROOT}/scripts/rhizome_entry.py"
 
-install -m 0755 \
-  "${BUILD_DIR}/dist/rhizome" \
-  "${OUTPUT_DIR}/rhizome-${platform}-${arch}"
+tar -C "${BUILD_DIR}/dist" \
+  -czf "${OUTPUT_DIR}/rhizome-${platform}-${arch}.tar.gz" rhizome
 if [[ "${SKIP_SMOKE:-0}" != "1" ]]; then
   smoke_root="$(mktemp -d)"
   CI=1 XDG_DATA_HOME="${smoke_root}/data" XDG_CACHE_HOME="${smoke_root}/cache" \
-    "${OUTPUT_DIR}/rhizome-${platform}-${arch}" --help >/dev/null
+    "${BUILD_DIR}/dist/rhizome/rhizome" --help >/dev/null
   rm -rf "${smoke_root}"
 fi
 printf 'built %s binary in %s\n' "${platform}-${arch}" "${OUTPUT_DIR}"

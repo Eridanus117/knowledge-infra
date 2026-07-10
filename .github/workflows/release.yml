@@ -10,4 +10,4 @@ jobs:
   release:
     permissions:
       contents: write
-    uses: source-gamma/.github/.github/workflows/python-release.yml@a3e25899dda04f4f1a573160d1b9d0e673a42421 # v11
+    uses: source-gamma/.github/.github/workflows/python-release.yml@62bfc4a14ab28fc932919f6d2d350f465b188494 # v12
