@@ -27,17 +27,37 @@
 
 ## 安装
 
+运行环境使用 [GitHub Releases](https://github.com/source-gamma/rhizome/releases) 中的
+自包含二进制，不需要 Python、`uv` 或本地源码仓。每个 release 提供
+`rhizome-<os>-<arch>` 和 `SHA256SUMS`；安装器必须先校验 checksum。
+
+Linux x86_64 产物以 Ubuntu 22.04 为兼容基线。直接安装 macOS arm64 版本：
+
 ```sh
-uv tool install --force .
+base=https://github.com/source-gamma/rhizome/releases/latest/download
+curl -fL "$base/rhizome-darwin-arm64" -o /tmp/rhizome-darwin-arm64
+curl -fL "$base/SHA256SUMS" -o /tmp/rhizome-SHA256SUMS
+(cd /tmp && grep '  rhizome-darwin-arm64$' rhizome-SHA256SUMS | shasum -a 256 -c -)
+install -m 0755 /tmp/rhizome-darwin-arm64 ~/.local/bin/rhizome
 ```
 
-本地开发：
+仓内提交门禁单独安装：
 
 ```sh
-uv sync
+pre-commit install --install-hooks
+```
+
+## 开发
+
+```sh
+uv sync --group dev
 uv run rhizome --help
 uv run pytest
 ```
+
+运行 `./scripts/build-release.sh` 可在 `dist/release/` 生成当前 OS/arch 的二进制。
+Pull request 会先在双平台构建和 smoke test；推送与 `pyproject.toml` 版本一致的
+`v*` tag 后才生成 `SHA256SUMS` 并发布不可变 release。
 
 ## 配置
 
@@ -47,6 +67,10 @@ uv run pytest
 2. 从当前目录向上查找 `kb-sources.toml`。
 3. `$KB_WORKSPACE_ROOT/kb-sources.toml`（默认 `~/workspace`）。
 4. `~/.config/rhizome/sources.toml`。
+
+registry 同目录可以放 `<stem>.local.toml`（例如 XDG 配置对应
+`~/.config/rhizome/sources.local.toml`），只覆盖已有 source 的机器本地
+`path`、`surface`、`legacy`；逻辑 source 清单仍由基础 registry 决定。
 
 `kb-sources.toml` 示例：
 

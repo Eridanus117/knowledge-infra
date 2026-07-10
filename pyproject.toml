@@ -8,7 +8,7 @@ authors = [{ name = "Eridanus" }]
 requires-python = ">=3.12"
 dependencies = [
     "gnomon",
-    "orrery-heartbeat @ git+https://github.com/source-gamma/orrery-heartbeat.git",
+    "orrery-heartbeat @ git+https://github.com/source-gamma/orrery-heartbeat.git@3eb8b4c4d5855e8da9f59f4456adfc5b38d262e8",
 ]
 
 [project.scripts]
@@ -36,6 +36,7 @@ dev = [
     "pytest>=9.1.1",
     "poethepoet",
 ]
+freeze = ["pyinstaller>=6.0,<7"]
 
 [tool.poe.tasks]
 lint = "uvx ruff@0.15.16 check ."
@@ -43,6 +44,7 @@ fmt = "uvx ruff@0.15.16 format ."
 typecheck = "uv run --with pyrefly==1.0.0 pyrefly check"
 test = "pytest"
 check = { sequence = ["lint", "typecheck", "test"], help = "lint + typecheck + test" }
+freeze = { cmd = "./scripts/build-release.sh", help = "build the self-contained rhizome release binary" }
 
 [tool.ruff]
 line-length = 88
