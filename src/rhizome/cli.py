@@ -23,8 +23,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from orrery_heartbeat import check_update
-
 from . import __version__, check, contract, doctor, sources, telemetry
 from . import adopt as adopt_mod
 from . import amend as amend_mod
@@ -1040,7 +1038,6 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0911
 
 
 def run() -> None:
-    check_update("rhizome", "source-gamma/rhizome")
     """Console-script entry: run the CLI under per-invocation telemetry capture.
 
     rhizome is argparse (not Typer/Click), so it can't use

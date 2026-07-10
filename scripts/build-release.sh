@@ -27,7 +27,6 @@ uv run --group freeze pyinstaller \
   --paths "${ROOT}/src" \
   --collect-submodules rhizome \
   --collect-submodules gnomon \
-  --collect-submodules orrery_heartbeat \
   --name rhizome \
   --distpath "${BUILD_DIR}/dist" \
   --workpath "${BUILD_DIR}/work/rhizome" \
@@ -39,7 +38,7 @@ install -m 0755 \
   "${OUTPUT_DIR}/rhizome-${platform}-${arch}"
 if [[ "${SKIP_SMOKE:-0}" != "1" ]]; then
   smoke_root="$(mktemp -d)"
-  CI=1 ORRERY_NO_UPDATE_CHECK=1 XDG_DATA_HOME="${smoke_root}/data" XDG_CACHE_HOME="${smoke_root}/cache" \
+  CI=1 XDG_DATA_HOME="${smoke_root}/data" XDG_CACHE_HOME="${smoke_root}/cache" \
     "${OUTPUT_DIR}/rhizome-${platform}-${arch}" --help >/dev/null
   rm -rf "${smoke_root}"
 fi
