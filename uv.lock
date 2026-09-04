@@ -217,7 +217,7 @@ wheels = [
 
 [[package]]
 name = "rhizome"
-version = "0.1.3"
+version = "0.1.4"
 source = { editable = "." }
 dependencies = [
     { name = "gnomon" },
