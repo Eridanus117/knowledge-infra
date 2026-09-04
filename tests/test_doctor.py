@@ -156,6 +156,31 @@ class TestDoctor(unittest.TestCase):
             self.assertEqual(gate["status"], doctor.PASS)
             self.assertIn(".pre-commit-config.yaml", gate["detail"])
 
+    def test_python_wrapper_gate_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            repo = self._repo(
+                ws,
+                "alpha",
+                gate="pre-commit:\n  commands:\n    kb-check:\n      run: python tools/check.py\n",
+            )
+            tools = repo / "tools"
+            tools.mkdir()
+            (tools / "check.py").write_text(
+                'subprocess.run(["rhizome", "check", *files])\n',
+                encoding="utf-8",
+            )
+            self._source(reg, "alpha")
+            report = doctor.run_doctor(registry=reg, which=_which)
+            self.assertTrue(report["ok"])
+            gate = next(
+                c
+                for c in report["sources"][0]["checks"]
+                if c["check"] == "gate-present"
+            )
+            self.assertEqual(gate["status"], doctor.PASS)
+            self.assertIn("wrapper `tools/check.py`", gate["detail"])
+
     def test_old_kb_check_name_tolerated(self):
         # adopt tolerates the legacy `kb check` name in the gate file; doctor must
         # agree (otherwise it would flag every not-yet-migrated repo as gateless).

@@ -46,6 +46,7 @@ skip) is NOT here — that is the compile step's own loud-report.
 from __future__ import annotations
 
 import re
+import shlex
 import shutil
 from pathlib import Path
 
@@ -70,15 +71,53 @@ _LEGACY_GATE_NAMES = ("kb",)
 
 # A lefthook `run:` line, e.g. `      run: rhizome check {staged_files}`.
 _RUN_LINE_RE = re.compile(r"^\s*run:\s*(?P<cmd>\S+)\b")
+_RUN_COMMAND_LINE_RE = re.compile(r"^\s*run:\s*(?P<cmd>.+)$")
+_RHIZOME_CHECK_RE = re.compile(r"\brhizome\b[\s\S]{0,160}\bcheck\b", re.IGNORECASE)
+
+
+def _wrapper_rhizome_check(repo_root: Path, config_text: str) -> str | None:
+    """Return a wrapper path when a gate script invokes ``rhizome check``.
+
+    Repositories may need a small dispatcher for special cases such as ADRs.
+    Treating that dispatcher as gateless makes ``doctor --sources`` disagree
+    with the hook that actually runs. Only scripts explicitly named by a
+    non-commented Lefthook ``run:`` line are inspected.
+    """
+    for line in config_text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        match = _RUN_COMMAND_LINE_RE.match(line)
+        if not match:
+            continue
+        try:
+            tokens = shlex.split(match.group("cmd"))
+        except ValueError:
+            continue
+        for token in tokens:
+            if not token.endswith((".py", ".ts")):
+                continue
+            script = Path(token)
+            if not script.is_absolute():
+                script = repo_root / script
+            if not script.is_file():
+                continue
+            try:
+                text = script.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if _RHIZOME_CHECK_RE.search(text):
+                return str(script.relative_to(repo_root))
+    return None
 
 
 def _gate_present(repo_root: Path) -> tuple[bool, str]:
     """Item 1: does the repo carry a KB commit gate at all?
 
     A gate counts if lefthook.yml names `rhizome check` (or the tolerated old
-    `kb check`, matching adopt._lefthook_state), or .pre-commit-config.yaml
-    wires the same. Comment lines never count (a commented-out gate is no gate —
-    same rule adopt enforces). Returns (ok, detail) where detail names the file
+    `kb check`, matching adopt._lefthook_state), if a named Python/TypeScript
+    wrapper invokes `rhizome check`, or if .pre-commit-config.yaml wires the
+    same. Comment lines never count (a commented-out gate is no gate — same
+    rule adopt enforces). Returns (ok, detail) where detail names the file
     that satisfied the gate, or every place we looked when it did not.
     """
     checked: list[str] = []
@@ -94,7 +133,10 @@ def _gate_present(repo_root: Path) -> tuple[bool, str]:
             if not ln.lstrip().startswith("#")
         ):
             return True, f"{fname} runs `rhizome check`"
-        checked.append(f"{fname} (no `rhizome check` command)")
+        wrapper = _wrapper_rhizome_check(repo_root, text)
+        if wrapper:
+            return True, f"{fname} wrapper `{wrapper}` runs `rhizome check`"
+        checked.append(f"{fname} (no `rhizome check` command or wrapper)")
     return False, "no KB commit gate found: " + "; ".join(checked)
 
 
