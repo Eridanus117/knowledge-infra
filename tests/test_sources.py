@@ -69,6 +69,42 @@ class TestRegistry(unittest.TestCase):
         ):
             sources.load_sources(Path(tmp) / "nope.toml")
 
+    def test_load_source_entries_surface_and_legacy_flags(self):
+        # surface tags the compact-map tier; legacy marks raw/unverified sources.
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            reg = base / "kb-sources.toml"
+            reg.write_text(
+                f'workspace_root = "{base}"\n'
+                '[[source]]\nname = "core-kb"\nsurface = "core"\n'
+                '[[source]]\nname = "legacy-kb"\nlegacy = true\n'
+                '[[source]]\nname = "vert-kb"\n'  # omitted flags → defaults
+            )
+            entries = sources.load_source_entries(reg)
+            self.assertEqual(
+                [(e["name"], e["surface"]) for e in entries],
+                [
+                    ("core-kb", "core"),
+                    ("legacy-kb", "vertical"),
+                    ("vert-kb", "vertical"),
+                ],
+            )
+            self.assertEqual(
+                [(e["name"], e["legacy"]) for e in entries],
+                [("core-kb", False), ("legacy-kb", True), ("vert-kb", False)],
+            )
+
+    def test_invalid_surface_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            reg = base / "kb-sources.toml"
+            reg.write_text(
+                f'workspace_root = "{base}"\n'
+                '[[source]]\nname = "kb"\nsurface = "bogus"\n'
+            )
+            with self.assertRaises(sources.SourcesError):
+                sources.load_source_entries(reg)
+
 
 class TestDiscovery(unittest.TestCase):
     def test_discover_nested_domains_skips_root_index(self):
@@ -298,6 +334,36 @@ class TestCaseInsensitiveDiscovery(unittest.TestCase):
             self.assertEqual(
                 [d["domain"] for d in sources.discover_domains(repo)], ["real"]
             )
+
+
+class TestLocalOverlay(unittest.TestCase):
+    def test_local_overlay_patches_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            _repo(base, "my-kb")
+            reg = _registry(base, ["my-kb"])
+            local = base / "kb-sources.local.toml"
+            local.write_text('[[source]]\nname = "my-kb"\npath = "/override/path"\n')
+            got = sources.load_sources(reg)
+            self.assertEqual(got[0][1], Path("/override/path"))
+
+    def test_local_overlay_unknown_name_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            _repo(base, "my-kb")
+            reg = _registry(base, ["my-kb"])
+            local = base / "kb-sources.local.toml"
+            local.write_text('[[source]]\nname = "no-such-kb"\npath = "/x"\n')
+            got = sources.load_sources(reg)
+            self.assertEqual(got[0][1], base / "my-kb")
+
+    def test_no_local_overlay_is_noop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            _repo(base, "my-kb")
+            reg = _registry(base, ["my-kb"])
+            got = sources.load_sources(reg)
+            self.assertEqual(got[0][1], base / "my-kb")
 
 
 if __name__ == "__main__":

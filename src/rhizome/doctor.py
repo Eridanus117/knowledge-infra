@@ -46,6 +46,7 @@ skip) is NOT here — that is the compile step's own loud-report.
 from __future__ import annotations
 
 import re
+import shlex
 import shutil
 from pathlib import Path
 
@@ -53,6 +54,14 @@ from . import adopt, contract, sources
 
 PASS = "pass"
 FAIL = "fail"
+WARN = "warn"  # advisory only — never flips a source (or the fleet) to fail
+
+# G2 split guidance (ADR-044): past this many notes a domain (excluding its
+# sub-domains) should split by theme into sub-domains — the domain-as-directory
+# native primitive — rather than keep growing flat. `decisions` archives are
+# chronological ADR logs and exempt.
+DOMAIN_CAPACITY_GUIDE = 10
+_CAPACITY_EXEMPT_LEAVES = frozenset({"decisions"})
 
 # Legacy command names that must never reappear in the adopt template's gate
 # lines. A kb→rhizome rename can leave `kb check` baked into the LEFTHOOK_YML
@@ -62,15 +71,53 @@ _LEGACY_GATE_NAMES = ("kb",)
 
 # A lefthook `run:` line, e.g. `      run: rhizome check {staged_files}`.
 _RUN_LINE_RE = re.compile(r"^\s*run:\s*(?P<cmd>\S+)\b")
+_RUN_COMMAND_LINE_RE = re.compile(r"^\s*run:\s*(?P<cmd>.+)$")
+_RHIZOME_CHECK_RE = re.compile(r"\brhizome\b[\s\S]{0,160}\bcheck\b", re.IGNORECASE)
+
+
+def _wrapper_rhizome_check(repo_root: Path, config_text: str) -> str | None:
+    """Return a wrapper path when a gate script invokes ``rhizome check``.
+
+    Repositories may need a small dispatcher for special cases such as ADRs.
+    Treating that dispatcher as gateless makes ``doctor --sources`` disagree
+    with the hook that actually runs. Only scripts explicitly named by a
+    non-commented Lefthook ``run:`` line are inspected.
+    """
+    for line in config_text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        match = _RUN_COMMAND_LINE_RE.match(line)
+        if not match:
+            continue
+        try:
+            tokens = shlex.split(match.group("cmd"))
+        except ValueError:
+            continue
+        for token in tokens:
+            if not token.endswith((".py", ".ts")):
+                continue
+            script = Path(token)
+            if not script.is_absolute():
+                script = repo_root / script
+            if not script.is_file():
+                continue
+            try:
+                text = script.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if _RHIZOME_CHECK_RE.search(text):
+                return str(script.relative_to(repo_root))
+    return None
 
 
 def _gate_present(repo_root: Path) -> tuple[bool, str]:
     """Item 1: does the repo carry a KB commit gate at all?
 
     A gate counts if lefthook.yml names `rhizome check` (or the tolerated old
-    `kb check`, matching adopt._lefthook_state), or .pre-commit-config.yaml
-    wires the same. Comment lines never count (a commented-out gate is no gate —
-    same rule adopt enforces). Returns (ok, detail) where detail names the file
+    `kb check`, matching adopt._lefthook_state), if a named Python/TypeScript
+    wrapper invokes `rhizome check`, or if .pre-commit-config.yaml wires the
+    same. Comment lines never count (a commented-out gate is no gate — same
+    rule adopt enforces). Returns (ok, detail) where detail names the file
     that satisfied the gate, or every place we looked when it did not.
     """
     checked: list[str] = []
@@ -86,7 +133,10 @@ def _gate_present(repo_root: Path) -> tuple[bool, str]:
             if not ln.lstrip().startswith("#")
         ):
             return True, f"{fname} runs `rhizome check`"
-        checked.append(f"{fname} (no `rhizome check` command)")
+        wrapper = _wrapper_rhizome_check(repo_root, text)
+        if wrapper:
+            return True, f"{fname} wrapper `{wrapper}` runs `rhizome check`"
+        checked.append(f"{fname} (no `rhizome check` command or wrapper)")
     return False, "no KB commit gate found: " + "; ".join(checked)
 
 
@@ -122,14 +172,62 @@ def _index_present(repo_root: Path) -> tuple[bool, str, list[str]]:
     return False, f"no {contract.INDEX_FILENAME} domain found under {repo_root}", []
 
 
+def _domain_note_counts(repo_root: Path) -> list[tuple[str, int]]:
+    """Notes per domain, ADR-017 ownership: a note belongs to its nearest
+    ancestor domain, so files under a sub-domain never count for the parent."""
+    infos = sources.discover_domains(repo_root)
+    dirs = {Path(i["index_path"]).resolve().parent: i["domain"] for i in infos}
+    counts = dict.fromkeys(dirs.values(), 0)
+    for ddir, dname in dirs.items():
+        for p in ddir.rglob("*.md"):
+            if p.name == contract.INDEX_FILENAME or ".git" in p.parts:
+                continue
+            owner = p.parent.resolve()
+            while owner != ddir and owner not in dirs:
+                owner = owner.parent
+            if owner == ddir:
+                counts[dname] += 1
+    return sorted(counts.items())
+
+
+def _domain_capacity(repo_root: Path) -> tuple[bool, str]:
+    """Advisory item: is any domain over the split-guidance size?
+
+    Returns (ok, detail); the caller maps ok=False to WARN, not FAIL — capacity
+    is guidance (SHOULD), the pipeline is not broken.
+    """
+    over = [
+        (name, n)
+        for name, n in _domain_note_counts(repo_root)
+        if n > DOMAIN_CAPACITY_GUIDE
+        and name.split("/")[-1] not in _CAPACITY_EXEMPT_LEAVES
+    ]
+    if not over:
+        return True, (
+            f"no domain over {DOMAIN_CAPACITY_GUIDE} notes (decisions exempt)"
+        )
+    listing = ", ".join(f"{name} ({n} notes)" for name, n in over)
+    return False, (
+        f"over the {DOMAIN_CAPACITY_GUIDE}-note split guide: {listing} — split by "
+        "theme into sub-domains (`rhizome relocate --batch`; G2/ADR-044)"
+    )
+
+
 def check_source(
-    name: str, repo_path: Path, *, gate_resolvable: tuple[bool, str], which
+    name: str,
+    repo_path: Path,
+    *,
+    gate_resolvable: tuple[bool, str],
+    legacy: bool = False,
 ) -> dict:
     """Probe one registered source repo. Pure (no printing).
 
     `gate_resolvable` is computed once for the fleet (it is a workstation-global
     PATH fact, identical for every repo) and threaded in so each row reports it.
     A missing repo can run no checks → it is a fail with that single reason.
+    `legacy=True` source rows are raw/unverified recall lanes, not normal KB
+    authoring repos, so they only need to exist; gate and INDEX checks are
+    intentionally skipped.
     """
     repo_path = repo_path.resolve()
     if not repo_path.is_dir():
@@ -146,9 +244,33 @@ def check_source(
             ],
         }
 
+    if legacy:
+        return {
+            "name": name,
+            "path": str(repo_path),
+            "legacy": True,
+            "ok": True,
+            "checks": [
+                {
+                    "check": "repo-exists",
+                    "status": PASS,
+                    "detail": f"registered legacy/raw source exists: {repo_path}",
+                },
+                {
+                    "check": "legacy-source",
+                    "status": PASS,
+                    "detail": (
+                        "legacy/raw/unverified recall lane — normal KB gate and "
+                        "INDEX checks intentionally skipped"
+                    ),
+                },
+            ],
+        }
+
     gate_ok, gate_detail = _gate_present(repo_path)
     res_ok, res_detail = gate_resolvable
     idx_ok, idx_detail, _ = _index_present(repo_path)
+    cap_ok, cap_detail = _domain_capacity(repo_path)
 
     checks = [
         {
@@ -166,10 +288,16 @@ def check_source(
             "status": PASS if idx_ok else FAIL,
             "detail": idx_detail,
         },
+        {
+            "check": "domain-capacity",
+            "status": PASS if cap_ok else WARN,
+            "detail": cap_detail,
+        },
     ]
     return {
         "name": name,
         "path": str(repo_path),
+        "legacy": False,
         "ok": gate_ok and res_ok and idx_ok,
         "checks": checks,
     }
@@ -184,13 +312,18 @@ def run_doctor(*, registry: Path | None = None, which=shutil.which) -> dict:
     registry itself is missing/unreadable (loud, never a silent empty run).
     """
     reg = registry or sources.find_registry()
-    entries = sources.load_sources(reg)
+    entries = sources.load_source_entries(reg)
     # The gate command resolves (or not) once for the whole workstation — it is
     # a PATH fact, not per-repo. Probe it a single time, report it on every row.
     gate_resolvable = _gate_resolvable(which)
     results = [
-        check_source(name, path, gate_resolvable=gate_resolvable, which=which)
-        for name, path in entries
+        check_source(
+            entry["name"],
+            entry["path"],
+            gate_resolvable=gate_resolvable,
+            legacy=bool(entry.get("legacy")),
+        )
+        for entry in entries
     ]
     return {
         "registry": str(reg),

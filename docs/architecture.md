@@ -8,16 +8,16 @@ kind: reference
 
 > 开发者地图。装 / 用见 [README](../README.md);本文给要改这块代码的人。本篇只讲**现状**:为什么是这些取舍(契约收敛、C2 node-chain 口径的来由)归 PM / ADR,这里只留指针。
 >
-> 校验过的 source of truth(校验日期 2026-06-15,version 0.1.0):`pyproject.toml`(console script `rhizome = "rhizome.cli:main"`,Python ≥3.11,**runtime 零依赖**)、`src/rhizome/cli.py`、`src/rhizome/contract.py`、`src/rhizome/check.py`、`src/rhizome/sources.py`、`src/rhizome/adopt.py`、`src/rhizome/links.py`、`mermaid-validator/validate-mermaid.mjs`。`tests/` 全绿(175 passed, 2 skipped)。
+> 校验过的 source of truth(校验日期 2026-07-06,version 0.1.0):`pyproject.toml`(console script `rhizome = "rhizome.cli:run"`,Python >=3.12,runtime 依赖 `gnomon` telemetry core)、`src/rhizome/cli.py`、`src/rhizome/contract.py`、`src/rhizome/check.py`、`src/rhizome/sources.py`、`src/rhizome/adopt.py`、`src/rhizome/amend.py`、`src/rhizome/capture.py`、`src/rhizome/config.py`、`src/rhizome/doctor.py`、`src/rhizome/links.py`、`src/rhizome/relocate.py`、`src/rhizome/telemetry.py`、`mermaid-validator/validate-mermaid.mjs`。
 
 ## 鸟瞰
 
-rhizome 是一个**去中心、文件式知识库的写入端 CLI**:把 Markdown + frontmatter 笔记按契约落进正确的域目录,并在 commit 时把不合契约的拦下。它不存数据、不建索引、不做检索——索引与查询交给外部引擎(Qdrant 等)读这些文件自建。整个包是 `src/rhizome`(对外命令同名 `rhizome`),**纯 Python、stdlib only**(`tomllib`/`urllib`/`subprocess`),可选一个 Node sidecar 做 Mermaid 校验。4 个 verb:`new`(写)/ `check`(门禁)/ `domains`(看域树 + 与中央索引对账)/ `adopt`(纳管一个仓)。
+rhizome 是一个**去中心、文件式知识库的写入端 CLI**:把 Markdown + frontmatter 笔记按契约落进正确的域目录,并在 commit 时把不合契约的拦下。它不存数据、不建索引、不做检索——索引与查询交给外部引擎读这些文件自建。整个包是 `src/rhizome`(对外命令同名 `rhizome`),核心逻辑以 Python 标准库为主,运行期只接入 `gnomon` 做本地 telemetry,可选一个 Node sidecar 做 Mermaid 校验。主要 verb:`new`(写)/ `amend`(补写)/ `check`(门禁)/ `domains`(看域树 + 与中央索引对账)/ `adopt`(纳管一个仓)/ `capture`(闪念捕获)/ `relocate`(跨源搬迁)。
 
 ## 分层
 
 ```
-cli.py            ── argparse 入口,4 个子命令,纯 IO 边界(parse/print/exit code)
+cli.py            ── argparse 入口,纯 IO 边界(parse/print/exit code)
   │
   ├─ contract.py  ── 契约单一真相:字段集 / kind 枚举 / 两套 domain 推导 / frontmatter render+parse+strip
   │
@@ -28,6 +28,9 @@ cli.py            ── argparse 入口,4 个子命令,纯 IO 边界(parse/prin
   │
   └─ adopt.py     ── 一键纳管:registry 行 + INDEX 骨架 + lefthook 门禁,plan-then-apply 幂等
 
+amend.py / capture.py / relocate.py / telemetry.py
+                 ── 补写、闪念捕获、跨源搬迁、本地 telemetry
+
 mermaid-validator/  ── 可选 Node sidecar,用 Mermaid 自己的 JS parser 校验图块(check.py 经 subprocess 调)
 ```
 
@@ -37,7 +40,7 @@ mermaid-validator/  ── 可选 Node sidecar,用 Mermaid 自己的 JS parser �
 
 | 符号 / 文件 | 职责 | 路径 |
 |---|---|---|
-| `main` / `_build_parser` | argparse 入口;4 个子命令(new/check/domains/adopt)的解析与分发 | `src/rhizome/cli.py` |
+| `run` / `_build_parser` | argparse 入口;子命令解析与分发 | `src/rhizome/cli.py` |
 | `run_new` | 纯函数:校验输入 → 定域 → 推 identity → 组装 frontmatter → 落文件(不打印) | `src/rhizome/cli.py` |
 | `_cmd_check` / `_fix_paths` | check 子命令编排:per-file + 仓级守卫 + `--fix` 剥字段 + JSON/文本输出 | `src/rhizome/cli.py` |
 | 契约常量 | `REQUIRED_FIELDS`/`OPTIONAL_FIELDS`/`KINDS`(7 值)/`KILLED_FIELDS`/`DERIVED_FIELDS`/`STATUS_ALLOWED`/`ASSET_PREFIXES` | `src/rhizome/contract.py` |
@@ -59,11 +62,14 @@ mermaid-validator/  ── 可选 Node sidecar,用 Mermaid 自己的 JS parser �
 | `mermaid_findings` / `mermaid_blocks` | 抽 ```mermaid 块,经 sidecar 校验;node/sidecar 缺失 → ERROR | `src/rhizome/check.py` |
 | `body_asset_ids` | 从正文「触达资产 / Touched Assets」段抽 asset_id(机械、窄) | `src/rhizome/check.py` |
 | `link_findings` | links(同仓 slug 须解析:断链 ERROR / 跨仓 WARN / identity 形 ERROR)、code(出处 hint,一律 ≤WARN) | `src/rhizome/links.py` |
-| `find_registry` / `load_sources` | 定位 `kb-sources.toml`(4 级查找)+ 解析成 `[(name, path)]` | `src/rhizome/sources.py` |
+| `find_registry` / `load_sources` | 定位基础 registry(4 级查找)+ 合并 sibling `*.local.toml` 机器路径 overlay，解析成 `[(name, path)]` | `src/rhizome/sources.py` |
 | `discover_domains` / `note_domain` | 走 INDEX.md 自发现域树(C2 口径);一篇笔记归哪个域 | `src/rhizome/sources.py` |
 | `build_tree` / `diff` | 域树(喂 surface-hook/recall)/ 与中央 Qdrant 集合的覆盖对账 | `src/rhizome/sources.py` |
 | `central_note_index` / `_qdrant_scroll_page` | scroll 中央集合 → `{repo: {identity: source_path}}`(stdlib urllib);不可达则**大声报错** | `src/rhizome/sources.py` |
 | `run_adopt` | plan-then-apply 幂等纳管:registry 行 + INDEX 骨架(仅当无域)+ lefthook 门禁 | `src/rhizome/adopt.py` |
+| `run_capture` | 把临时文本 append 到本地 inbox,不进入 KB 索引边界 | `src/rhizome/capture.py` |
+| `plan_relocate` / `apply_relocate` | 跨源移动 note,更新 wikilink,维护搬迁 ledger | `src/rhizome/relocate.py` |
+| `record_invocation` | 记录本地 CLI 调用的 stdout/stderr 摘要和退出码 | `src/rhizome/telemetry.py` |
 | `LEFTHOOK_YML` | 写入仓的 pre-commit 模板:`rhizome check {staged_files}` + `--duplicate-domains --staged-frozen` | `src/rhizome/adopt.py` |
 | `validate-mermaid.mjs` | Node sidecar:用 Mermaid `parse()` 判图块合法,产 `{findings:[...]}` JSON | `mermaid-validator/` |
 
@@ -107,7 +113,7 @@ mermaid-validator/  ── 可选 Node sidecar,用 Mermaid 自己的 JS parser �
 `_cmd_check`:
 
 1. 仓级守卫先跑:`--duplicate-domains`(或 `--all`)→ `duplicate_domain_findings`;`--staged-frozen` → `staged_frozen_findings`。两者皆可独立运行(commit hook 的仓守卫),也可与 per-file 并跑。
-2. 收路径:`--all` 走仓根 `rglob("*.md")`(跳 `.git/.venv/__pycache__/node_modules`),否则取 args(lefthook `{staged_files}`)。
+2. 收路径:`--all` 走仓根 `rglob("*.md")`(跳 `.git/.venv/__pycache__/node_modules`),否则取 hook 传入的 staged Markdown paths。
 3. `--fix`:对每条路径,跳过域外文件与 HEAD 冻结文件,`strip_fields` 剥 `KILLED ∪ DERIVED`(+ 非法 `status`),仅当确有改动才回写,打印改了哪些。
 4. per-file:`check_path` = `check_text`(契约 + Mermaid)+ `frozen_gate_findings` + `link_findings`。`check_text` 内对 `kind: decision` 还做 assets 审计(未知前缀、数量阈值 12、与正文「触达资产」段对账)。
 5. 跨文件:`_asset_reuse_candidates` 聚合 ≥3 篇 decision 复用同一 asset → externalize 候选 WARN。

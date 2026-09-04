@@ -1,17 +1,20 @@
 name: CI
-on: [push, pull_request]
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v8.2.0
-        with:
-          enable-cache: true
-      - run: uv sync --locked
-      # lint/format: ruff 隔离跑(不需项目环境), pin 版本
-      - run: uvx ruff@0.15.16 check --output-format=github
-      - run: uvx ruff@0.15.16 format --check
-      # 类型检查: pyrefly 需项目环境解析三方 import, 用 --with 临时注入并 pin
-      - run: uv run --with pyrefly==1.0.0 pyrefly check
-      - run: uv run pytest
+  ci:
+    uses: source-gamma/.github/.github/workflows/python-ci.yml@58e94252df4b455f1b6890ca5a8b400b3688ba81 # v9
+    with:
+      ruff-extend-ignore: "['TRY003','RUF001']"
+      ruff-extend-per-file-ignores: "{'tests/**'=['ARG']}"

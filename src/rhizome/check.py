@@ -30,11 +30,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import contract
+from . import config, contract
 from .contract import ContractError
 
 ERROR = "error"
 WARN = "warn"
+
+# `git diff --name-status` lines are tab-separated: status field + at least one path.
+_NAME_STATUS_MIN_FIELDS = 2
+# A domain mapped to fewer than this many dirs is not a duplicate.
+_DUPLICATE_MIN_DIRS = 2
 
 # Narrow, single-file frozen-amend approval channel.
 # `rhizome amend` sets this env var to ONE absolute file path before spawning the
@@ -44,6 +49,7 @@ WARN = "warn"
 # still fires. Deliberately one path, never a list or wildcard: a provenance
 # channel for one approved edit, not a reusable escape hatch.
 _AMEND_APPROVED_ENV = "RHIZOME_AMEND_APPROVED"
+_MERMAID_VALIDATOR_DIR_ENV = "RHIZOME_MERMAID_VALIDATOR_DIR"
 
 # Directories that never hold KB content (mirrors sources._SKIP_DIRS); the
 # repo-level INDEX.md walk skips these plus any hidden dir (.git/.venv/...).
@@ -64,7 +70,7 @@ class Finding:
         return f"{self.severity}: {loc}{self.message}"
 
 
-def check_text(text: str) -> list[Finding]:
+def check_text(text: str) -> list[Finding]:  # noqa: C901, PLR0912
     """Validate one note's raw text; return findings (possibly empty)."""
     try:
         fm = contract.parse_frontmatter(text)
@@ -264,6 +270,21 @@ def _git_head_text(repo_root: Path, rel: str) -> str | None:
     return proc.stdout.decode("utf-8", errors="replace")
 
 
+def _git_staged_text(repo_root: Path, rel: str) -> str | None:
+    """Content of the staged blob ``:<rel>`` (the index), or None if absent."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "show", f":{rel}"],
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.decode("utf-8", errors="replace")
+
+
 def _head_frozen_text(path: Path) -> str | None:
     """HEAD content of `path` if that HEAD version is frozen, else None."""
     repo_root = contract.find_repo_root(path.parent)
@@ -333,12 +354,74 @@ def frozen_gate_findings(path: Path, text: str) -> list[Finding]:
     ]
 
 
-def staged_frozen_findings(repo_root: Path) -> list[Finding]:
+def _relocate_exempt(repo_root: Path, op: str, parts: list[str], head: str) -> bool:  # noqa: PLR0911
+    """True iff this staged D/R of a frozen doc is an audited, content-preserving
+    relocate (`rhizome relocate`), not an illicit delete or a smuggled edit.
+
+    Requires ALL of: (1) a `.relocate-ledger` record matching this old path AND
+    the content hash of its HEAD version — provenance + proof the recorded
+    content is exactly what is leaving; (2) the relocated copy actually exists
+    content-identical — verified against the staged blob for a within-repo move
+    (where the add is in this same commit), and trusted to the ledger for a
+    cross-repo move (the target's add lives in another repo, unseeable here).
+
+    The semantics stay intact: an in-place edit is an `M` (handled by the
+    per-file gate, untouched), and a delete with no ledger record never matches.
+    """
+    from . import contract as _contract  # local: avoid top-level coupling churn
+    from . import relocate
+
+    old_rel = parts[1]
+    rec = relocate.find_record(repo_root, old_rel, relocate.content_hash(head))
+    if rec is None:
+        return False  # no provenance → block (illicit / unrecorded delete)
+    this_repo = _contract.repo_name(repo_root)
+    new_repo = rec["new_identity"].split(":", 1)[0] if rec["new_identity"] else ""
+    if new_repo and new_repo != this_repo:
+        # cross-repo: the content-identical copy lives in the TARGET repo. Its add
+        # is in another repo's commit (unseeable in git here), but the target's
+        # working tree IS readable locally — so verify the byte-identical copy
+        # actually exists there, rather than trusting the (writable) ledger alone.
+        # The HEAD hash is public, so a hand-forged ledger line would otherwise
+        # green-light deleting any frozen doc with no real copy anywhere (and a
+        # within-repo delete could mislabel itself cross-repo to skip the staged
+        # byte-check below). Reading the target's file shuts both down.
+        from . import sources
+
+        try:
+            srcs = sources.load_sources(None)
+        except sources.SourcesError:
+            return False
+        tgt_root = next((p for n, p in srcs if n == new_repo), None)
+        if tgt_root is None:
+            return False
+        tgt_root = tgt_root.resolve()
+        tgt_file = (tgt_root / rec["new_rel"]).resolve()
+        if tgt_root not in tgt_file.parents:  # containment: new_rel escapes target
+            return False
+        try:
+            tgt_text = tgt_file.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        return relocate.content_hash(tgt_text) == relocate.content_hash(head)
+    # within-repo: prove the relocated copy is staged here, byte-for-byte.
+    new_rel = parts[2] if op == "R" and len(parts) > 2 else rec["new_rel"]  # noqa: PLR2004
+    staged = _git_staged_text(repo_root, new_rel)
+    return staged is not None and relocate.content_hash(
+        staged
+    ) == relocate.content_hash(head)
+
+
+def staged_frozen_findings(repo_root: Path) -> list[Finding]:  # noqa: C901
     """Repo-level: ERROR on staged delete/rename of a HEAD-frozen KB note.
 
     Per-file checks never see deletions (the path is gone from {staged_files}),
     so the D/R channel is closed here from `git diff --cached --name-status`.
     Only paths inside a KB domain are gated (PM issues etc. stay out of scope).
+
+    One narrow exception: an audited, content-preserving `rhizome relocate`
+    (recorded in `.relocate-ledger`) is a position change, not a content edit,
+    so its staged delete/rename is allowed (see `_relocate_exempt`).
     """
     try:
         proc = subprocess.run(
@@ -354,7 +437,7 @@ def staged_frozen_findings(repo_root: Path) -> list[Finding]:
     findings: list[Finding] = []
     for line in proc.stdout.splitlines():
         parts = line.split("\t")
-        if len(parts) < 2 or not parts[0]:
+        if len(parts) < _NAME_STATUS_MIN_FIELDS or not parts[0]:
             continue
         op = parts[0][0]
         if op not in ("D", "R"):
@@ -373,6 +456,8 @@ def staged_frozen_findings(repo_root: Path) -> list[Finding]:
             continue
         if not contract.is_frozen_fm(head_fm):
             continue
+        if _relocate_exempt(repo_root, op, parts, head):
+            continue  # audited content-preserving relocate — position change, not edit
         verb = "deletion" if op == "D" else "rename"
         findings.append(
             Finding(
@@ -403,6 +488,23 @@ def _tool_root() -> Path:
 
 
 def _mermaid_validator_dir() -> Path:
+    env = os.environ.get(_MERMAID_VALIDATOR_DIR_ENV)
+    if env:
+        return config.expand_path(env)
+
+    cfg = config.load_config()
+    mermaid = cfg.get("mermaid")
+    if mermaid is not None:
+        if not isinstance(mermaid, dict):
+            raise config.ConfigError("[mermaid] must be a TOML table")
+        raw = mermaid.get("validator_dir")
+        if raw is not None:
+            if not isinstance(raw, str) or not raw.strip():
+                raise config.ConfigError(
+                    "mermaid.validator_dir must be a non-empty string"
+                )
+            return config.expand_path(raw)
+
     return _tool_root() / "mermaid-validator"
 
 
@@ -412,7 +514,10 @@ def _mermaid_validator_script() -> Path:
 
 def mermaid_parser_available() -> bool:
     """True when the local Mermaid JS parser sidecar is installed."""
-    root = _mermaid_validator_dir()
+    try:
+        root = _mermaid_validator_dir()
+    except config.ConfigError:
+        return False
     return (
         shutil.which("node") is not None
         and _mermaid_validator_script().is_file()
@@ -451,7 +556,7 @@ def mermaid_blocks(text: str) -> list[tuple[int, str]]:
     return blocks
 
 
-def mermaid_findings(text: str) -> list[Finding]:
+def mermaid_findings(text: str) -> list[Finding]:  # noqa: PLR0911
     blocks = mermaid_blocks(text)
     if not blocks:
         return []
@@ -466,8 +571,11 @@ def mermaid_findings(text: str) -> list[Finding]:
             )
         ]
 
-    root = _mermaid_validator_dir()
-    script = _mermaid_validator_script()
+    try:
+        root = _mermaid_validator_dir()
+        script = _mermaid_validator_script()
+    except config.ConfigError as exc:
+        return [Finding(ERROR, "mermaid", f"config error: {exc}")]
     if not script.is_file():
         return [Finding(ERROR, "mermaid", f"validator script missing: {script}")]
     if not (root / "node_modules" / "mermaid").is_dir():
@@ -563,7 +671,7 @@ def duplicate_domain_findings(repo_root: Path) -> list[Finding]:
 
     findings: list[Finding] = []
     for domain, dirs in sorted(by_domain.items()):
-        if len(dirs) < 2:
+        if len(dirs) < _DUPLICATE_MIN_DIRS:
             continue
         dirs = sorted(dirs)
         findings.append(

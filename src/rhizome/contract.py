@@ -123,6 +123,17 @@ FORBIDDEN_FIELDS = KILLED_FIELDS | DERIVED_FIELDS
 # slug = filename = identity tail; keep it predictable (lowercase kebab).
 _SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
+# Slugs only locate/distinguish; semantics belong in description/keywords and
+# humans read the domain INDEX (kb-note-contract §3, org-contract D5-D7).
+SLUG_WORDS_SHOULD_MAX = 6
+_ADR_PREFIX_RE = re.compile(r"^adr-\d+-")
+
+
+def slug_excess_words(topic: str) -> int:
+    """Words beyond the SHOULD cap, ignoring an `adr-NNN-` prefix; 0 if fine."""
+    rest = _ADR_PREFIX_RE.sub("", topic.strip())
+    return max(0, len(rest.split("-")) - SLUG_WORDS_SHOULD_MAX)
+
 
 class ContractError(ValueError):
     """A field or value violates the §存 contract."""
@@ -182,8 +193,7 @@ def validate_assets(assets: list[str]) -> list[str]:
     them as warnings so new asset families can be recorded before the canonical
     prefix set catches up.
     """
-    cleaned = [a.strip() for a in assets if a.strip()]
-    return cleaned
+    return [a.strip() for a in assets if a.strip()]
 
 
 def asset_prefix(asset: str) -> str | None:
@@ -241,7 +251,7 @@ def has_index(dirpath: Path) -> bool:
     directory listing pins the exact byte name.
     """
     try:
-        return INDEX_FILENAME in os.listdir(dirpath)
+        return any(p.name == INDEX_FILENAME for p in dirpath.iterdir())
     except OSError:
         return False
 
@@ -256,7 +266,7 @@ def find_domain_dir(start: Path, repo_root: Path) -> Path | None:
     while True:
         if has_index(cur):
             return cur
-        if cur == root or cur.parent == cur:
+        if cur in (root, cur.parent):
             return None
         cur = cur.parent
 
@@ -360,7 +370,7 @@ def _flow_list(items: list[str]) -> str:
     return "[" + ", ".join(_flow_item(x) for x in items) + "]"
 
 
-def render_frontmatter(
+def render_frontmatter(  # noqa: PLR0913
     *,
     description: str,
     keywords: list[str],
@@ -435,7 +445,9 @@ def split_frontmatter(text: str) -> tuple[str, str] | None:
 
 def _unquote(s: str) -> str:
     s = s.strip()
-    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+    # A quoted scalar needs at least an opening and a closing quote.
+    min_quoted_len = 2
+    if len(s) >= min_quoted_len and s[0] == s[-1] and s[0] in "\"'":
         inner = s[1:-1]
         if s[0] == '"':
             inner = inner.replace('\\"', '"').replace("\\\\", "\\")
@@ -491,7 +503,7 @@ def _strip_comment(s: str) -> str:
     return "".join(out).strip()
 
 
-def parse_frontmatter(text: str) -> dict | None:
+def parse_frontmatter(text: str) -> dict | None:  # noqa: C901
     """Parse a note's frontmatter into a flat dict, or None if no frontmatter.
 
     Raises ContractError on unterminated frontmatter. Handles flow lists
@@ -553,7 +565,7 @@ def parse_frontmatter(text: str) -> dict | None:
     return out
 
 
-def strip_fields(text: str, remove: frozenset[str]) -> tuple[str, list[str]]:
+def strip_fields(text: str, remove: frozenset[str]) -> tuple[str, list[str]]:  # noqa: C901, PLR0912
     """Remove the given top-level frontmatter keys (with their continuation
     lines) from a note, preserving every other line and the body VERBATIM.
 

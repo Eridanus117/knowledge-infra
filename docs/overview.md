@@ -1,3 +1,11 @@
+---
+description: "rhizome CLI 的理解导向概览：解释去中心 Markdown 知识、note/domain/identity/frontmatter、new/check 写入门禁、frozen 边界与工具心智模型。"
+keywords: [rhizome, overview, CLI, note, domain, identity, frontmatter, new, check, frozen]
+kind: reference
+links: [architecture]
+code: [src/rhizome]
+---
+
 # rhizome 概览
 
 > 讲 rhizome 怎么运作、为什么这么设计(理解导向)。要跑起来 → [README](../README.md);要改代码 → [architecture](architecture.md)。本文不讲安装、不列字段清单。
@@ -24,7 +32,7 @@ rhizome 是这套去中心格局里的**写入端工具**——它只做两件�
 
 1. 你 `cd` 进某个 KB 仓里某个域目录,把笔记正文管给 `rhizome new <slug> -d "一句话描述" -k 关键词1,关键词2`。
 2. `new` 从 cwd 往上找最近的 `INDEX.md` 定出域,从仓根推出 identity,组装合规 frontmatter,把 `<slug>.md` 写进那个域目录。**它不会覆盖已存在的文件**,也**不会**在找不到 INDEX.md 时悄悄落到祖先域——没有域就报错,要你先建 INDEX.md。
-3. 你 `git add` + `git commit`。仓里装的 pre-commit hook 触发 `rhizome check {staged_files}`:逐个校验改动的 Markdown。
+3. 你 `git add` + `git commit`。仓里装的 pre-commit hook 对 staged Markdown 跑 `rhizome check`,并额外执行 duplicate-domain 与 staged-frozen 仓级守卫。
 4. check 通过 → 提交落地;有 ERROR → 提交被拦,告诉你哪篇哪个字段错了。一类常见错误(带了被杀/派生字段)可以 `rhizome check --fix` 一键无损剥除,再提交。
 
 第 2 步和第 4 步藏着 rhizome 的核心姿态:**写入和校验都 fail-loud**。`new` 找不到域宁可报错也不猜;`check` 测不准(frontmatter 坏了)就报 ERROR 而不是放行。"没明确合规"不等于"合规"。

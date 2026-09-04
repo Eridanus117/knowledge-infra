@@ -91,7 +91,7 @@ def _code_resolvable(entry: str, repo_root: Path) -> bool:
     return any((r / rel).exists() for r in roots)
 
 
-def link_findings(path: Path, text: str) -> list[Finding]:
+def link_findings(path: Path, text: str) -> list[Finding]:  # noqa: C901, PLR0912
     """一篇 note 的 links/code 引用检查;非 note / frozen / 无 frontmatter → 静默跳过。"""
     try:
         fm = contract.parse_frontmatter(text)

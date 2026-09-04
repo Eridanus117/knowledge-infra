@@ -20,6 +20,11 @@ from . import contract
 
 REGISTRY_FILENAME = "kb-sources.toml"
 _DEFAULT_WORKSPACE_ROOT = "~/workspace"
+# How a source appears in the compact domain map (`rhizome domains --compact`):
+# "core" → shown inline with its domains; "vertical" → name only (expand with
+# `rhizome domains <name>`). Sources omitting the tag default to "vertical".
+_DEFAULT_SURFACE = "vertical"
+_VALID_SURFACES = ("core", "vertical")
 # Directories never treated as KB content (no domain lives here).
 _SKIP_DIRS = {".git", ".venv", "__pycache__", "node_modules", "dist"}
 # The central Qdrant collection for the completeness diff (`rhizome domains --diff`).
@@ -74,8 +79,39 @@ def _workspace_root() -> Path:
     ).expanduser()
 
 
-def load_sources(registry: Path | None = None) -> list[tuple[str, Path]]:
-    """Return [(name, repo_path), ...]; KB_WORKSPACE_ROOT overrides the base."""
+def _find_local_overlay(registry: Path) -> Path | None:
+    """Sibling .local.toml for machine-specific overrides (gitignored)."""
+    local = registry.with_name(registry.stem + ".local.toml")
+    return local if local.is_file() else None
+
+
+def _load_local_overrides(registry: Path) -> dict[str, dict]:
+    """Load local overlay; returns {name: {field: value}} for patch-merge."""
+    local = _find_local_overlay(registry)
+    if local is None:
+        return {}
+    try:
+        data = tomllib.loads(local.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise SourcesError(f"{local}: {exc}") from exc
+    overrides: dict[str, dict] = {}
+    for entry in data.get("source", []):
+        name = entry.get("name")
+        if not name:
+            continue
+        overrides[name] = {k: v for k, v in entry.items() if k != "name"}
+    return overrides
+
+
+def load_source_entries(registry: Path | None = None) -> list[dict]:  # noqa: C901, PLR0912
+    """Return [{name, path, surface, legacy}, ...]; KB_WORKSPACE_ROOT overrides the base.
+
+    `surface` is the compact-map tier ("core" | "vertical", default "vertical");
+    `legacy` marks raw/unverified read-only sources whose hits need trust
+    calibration at recall time and should not be treated as normal KB sources;
+    see `_DEFAULT_SURFACE`. This is the full parse; `load_sources` is the
+    (name, path) view kept for the indexer / diff / recall callers.
+    """
     reg = registry or find_registry()
     if not reg.is_file():
         raise SourcesError(f"registry not found: {reg}")
@@ -101,10 +137,47 @@ def load_sources(registry: Path | None = None) -> list[tuple[str, Path]]:
             raise SourcesError(f"duplicate source name {name!r}")
         seen.add(name)
         path = Path(entry["path"]).expanduser() if entry.get("path") else base / name
-        out.append((name, path))
+        surface = entry.get("surface", _DEFAULT_SURFACE)
+        if surface not in _VALID_SURFACES:
+            raise SourcesError(
+                f"source {name!r}: invalid surface {surface!r} "
+                f"({'|'.join(_VALID_SURFACES)})"
+            )
+        out.append(
+            {
+                "name": name,
+                "path": path,
+                "surface": surface,
+                "legacy": entry.get("legacy") is True,
+            }
+        )
     if not out:
         raise SourcesError(f"{reg}: no [[source]] entries")
+    # Apply machine-local overrides (kb-sources.local.toml sibling).
+    overrides = _load_local_overrides(reg)
+    if overrides:
+        by_name = {e["name"]: e for e in out}
+        for oname, ofields in overrides.items():
+            if oname not in by_name:
+                continue
+            target = by_name[oname]
+            if "path" in ofields:
+                target["path"] = Path(ofields["path"]).expanduser()
+            if "surface" in ofields:
+                s = ofields["surface"]
+                if s not in _VALID_SURFACES:
+                    raise SourcesError(
+                        f"local override for {oname!r}: invalid surface {s!r}"
+                    )
+                target["surface"] = s
+            if "legacy" in ofields:
+                target["legacy"] = ofields["legacy"] is True
     return out
+
+
+def load_sources(registry: Path | None = None) -> list[tuple[str, Path]]:
+    """Return [(name, repo_path), ...]; KB_WORKSPACE_ROOT overrides the base."""
+    return [(e["name"], e["path"]) for e in load_source_entries(registry)]
 
 
 # ---- domain discovery -----------------------------------------------------
@@ -230,10 +303,18 @@ def note_domain(note_path: Path, repo: Path) -> str | None:
 
 
 def build_tree(registry: Path | None = None) -> list[dict]:
-    """[{name, path, exists, domains:[...]}] — feeds surface-hook & recall."""
+    """[{name, path, surface, exists, domains:[...]}] — feeds surface-hook & recall."""
     tree = []
-    for name, path in load_sources(registry):
-        node = {"name": name, "path": str(path), "exists": path.is_dir(), "domains": []}
+    for e in load_source_entries(registry):
+        path = e["path"]
+        node = {
+            "name": e["name"],
+            "path": str(path),
+            "surface": e["surface"],
+            "legacy": bool(e.get("legacy")),
+            "exists": path.is_dir(),
+            "domains": [],
+        }
         if node["exists"]:
             node["domains"] = discover_domains(path)
         tree.append(node)

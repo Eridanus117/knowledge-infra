@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import io
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from rhizome.cli import CliError, _asset_reuse_candidates, main, run_new
+from rhizome.cli import (
+    CliError,
+    _asset_reuse_candidates,
+    _read_new_body,
+    main,
+    run_new,
+)
 from rhizome.contract import ContractError
 
 
@@ -209,6 +217,218 @@ class TestRunNew(unittest.TestCase):
             self.assertEqual(res["identity"], f"{root.name}:widgets/blue:ap-gap")
 
 
+@contextlib.contextmanager
+def _chdir(path: Path):
+    prev = Path.cwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(prev)
+
+
+class TestNewBodyInput(unittest.TestCase):
+    """`rhizome new` body source: --body-file (`-`=stdin) or default stdin (Tier 1)."""
+
+    def _repo_with_domain(self, tmp: str, domain: str = "design") -> tuple[Path, Path]:
+        root = Path(tmp)
+        (root / ".git").mkdir()
+        d = root / domain
+        d.mkdir(parents=True)
+        (d / "INDEX.md").write_text("# design domain\n")
+        return root, d
+
+    def test_body_file_reads_from_file(self):
+        args = argparse.Namespace(body_file=None)
+        with tempfile.TemporaryDirectory() as tmp:
+            bf = Path(tmp) / "body.md"
+            bf.write_text("# Title\n\n$X `code` )unbalanced( — CJK，标点\n")
+            args.body_file = str(bf)
+            self.assertEqual(_read_new_body(args), bf.read_text())
+
+    def test_body_file_dash_reads_stdin(self):
+        args = argparse.Namespace(body_file="-")
+        with mock.patch("sys.stdin", io.StringIO("piped body")):
+            self.assertEqual(_read_new_body(args), "piped body")
+
+    def test_body_file_missing_returns_none_and_warns(self):
+        args = argparse.Namespace(body_file="/no/such/body.md")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertIsNone(_read_new_body(args))
+        self.assertIn("--body-file", err.getvalue())
+
+    def test_body_file_non_utf8_returns_none(self):
+        # non-UTF8 file → UnicodeDecodeError (a ValueError, not OSError); must be
+        # caught as a channel error (None → exit 2), never an uncaught traceback.
+        with tempfile.TemporaryDirectory() as tmp:
+            bf = Path(tmp) / "latin1.md"
+            bf.write_bytes(b"# T\n\n\xff\xfe not utf-8 \x80\x81\n")
+            args = argparse.Namespace(body_file=str(bf))
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertIsNone(_read_new_body(args))
+            self.assertIn("--body-file", err.getvalue())
+
+    def test_new_end_to_end_non_utf8_exits_2_no_crash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, d = self._repo_with_domain(tmp)
+            bf = Path(tmp) / "bad.md"
+            bf.write_bytes(b"\xff\xfe\x00\x80")
+            with _chdir(d), contextlib.redirect_stderr(io.StringIO()):
+                rc = main(["new", "x", "-d", "d", "-k", "a", "--body-file", str(bf)])
+            self.assertEqual(rc, 2)
+            self.assertFalse((d / "x.md").exists())
+
+    def test_empty_content_body_file_exits_1(self):
+        # empty file is a valid channel but an empty body → run_new's exit-1
+        # contract, not the exit-2 channel path.
+        with tempfile.TemporaryDirectory() as tmp:
+            _, d = self._repo_with_domain(tmp)
+            bf = Path(tmp) / "empty.md"
+            bf.write_text("   \n")
+            with _chdir(d), contextlib.redirect_stderr(io.StringIO()):
+                rc = main(["new", "x", "-d", "d", "-k", "a", "--body-file", str(bf)])
+            self.assertEqual(rc, 1)
+
+    def test_default_reads_stdin_backward_compat(self):
+        args = argparse.Namespace(body_file=None)
+        with mock.patch("sys.stdin", io.StringIO("legacy stdin body")):
+            self.assertEqual(_read_new_body(args), "legacy stdin body")
+
+    def test_default_tty_returns_none_and_mentions_body_file(self):
+        args = argparse.Namespace(body_file=None)
+        fake = io.StringIO("")
+        fake.isatty = lambda: True  # type: ignore[method-assign]
+        err = io.StringIO()
+        with mock.patch("sys.stdin", fake), contextlib.redirect_stderr(err):
+            self.assertIsNone(_read_new_body(args))
+        self.assertIn("--body-file", err.getvalue())
+
+    def test_new_end_to_end_via_body_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, d = self._repo_with_domain(tmp)
+            bf = Path(tmp) / "b.md"
+            bf.write_text("# Note\n\nbody via file\n")
+            out = io.StringIO()
+            with (
+                _chdir(d),
+                contextlib.redirect_stdout(out),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                rc = main(
+                    ["new", "via-file", "-d", "d", "-k", "a", "--body-file", str(bf)]
+                )
+            self.assertEqual(rc, 0)
+            note = d / "via-file.md"
+            self.assertTrue(note.exists())
+            self.assertIn("body via file", note.read_text())
+
+    def test_empty_body_message_mentions_body_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, d = self._repo_with_domain(tmp)
+            with self.assertRaises(CliError) as ctx:
+                run_new("x", description="d", keywords=["a"], body="  \n", cwd=d)
+            self.assertIn("--body-file", str(ctx.exception))
+
+
+class TestDomainHints(unittest.TestCase):
+    """Did-you-mean hints on domain/cwd errors (Tier 3)."""
+
+    def _repo(self, base: Path, name: str, domains: tuple[str, ...]) -> Path:
+        root = base / name
+        (root / ".git").mkdir(parents=True)
+        for dom in domains:
+            d = root / dom
+            d.mkdir(parents=True)
+            (d / "INDEX.md").write_text("# dom\n")
+        return root
+
+    def test_domain_nonexistent_lists_valid_domains(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._repo(Path(tmp), "kb", ("design", "research"))
+            with self.assertRaises(CliError) as ctx:
+                run_new(
+                    "x",
+                    description="d",
+                    keywords=["a"],
+                    domain="ghost",
+                    body="x",
+                    cwd=root,
+                )
+            msg = str(ctx.exception)
+            self.assertIn("valid domains", msg)
+            self.assertIn("design", msg)
+            self.assertIn("research", msg)
+
+    def test_domain_doubling_suggests_bare_domain(self):
+        # agent prepends the repo name to a repo-relative --domain
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._repo(Path(tmp), "source-delta", ("docs",))
+            with self.assertRaises(CliError) as ctx:
+                run_new(
+                    "x",
+                    description="d",
+                    keywords=["a"],
+                    domain="source-delta/docs",
+                    body="x",
+                    cwd=root,
+                )
+            self.assertIn("did you mean 'docs'", str(ctx.exception))
+
+    def test_hint_lists_physical_path_not_c2_chain(self):
+        # C2-skip topology: b/ has no INDEX, so the C2 domain is `a/c` but the
+        # physical --domain value is `a/b/c`. The hint MUST list the physical
+        # path (what --domain consumes), never the C2 form that would re-fail.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "kb"
+            (root / ".git").mkdir(parents=True)
+            (root / "a").mkdir()
+            (root / "a" / "INDEX.md").write_text("# a\n")
+            (root / "a" / "b" / "c").mkdir(parents=True)
+            (root / "a" / "b" / "c" / "INDEX.md").write_text("# c\n")
+            with self.assertRaises(CliError) as ctx:
+                run_new(
+                    "x",
+                    description="d",
+                    keywords=["a"],
+                    domain="a/c",
+                    body="x",
+                    cwd=root,
+                )
+            msg = str(ctx.exception)
+            self.assertIn("a/b/c", msg)  # physical path, the one that works
+            self.assertNotIn("a/c;", msg)  # not the dead-end C2 form
+            # and the suggested physical path actually lands a note
+            res = run_new(
+                "y",
+                description="d",
+                keywords=["a"],
+                domain="a/b/c",
+                body="x",
+                cwd=root,
+            )
+            self.assertEqual(Path(res["path"]).parent.name, "c")
+
+    def test_derive_no_domain_lists_valid_domains(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._repo(Path(tmp), "kb", ("design",))
+            # cwd = repo root (no INDEX.md at root) → derive fails
+            with self.assertRaises(CliError) as ctx:
+                run_new("x", description="d", keywords=["a"], body="x", cwd=root)
+            msg = str(ctx.exception)
+            self.assertIn("valid domains", msg)
+            self.assertIn("design", msg)
+
+    def test_not_git_repo_hint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bare = Path(tmp) / "loose"
+            bare.mkdir()
+            with self.assertRaises(CliError) as ctx:
+                run_new("x", description="d", keywords=["a"], body="x", cwd=bare)
+            self.assertIn("rhizome domains", str(ctx.exception))
+
+
 class TestCheckDuplicateDomainsCmd(unittest.TestCase):
     """`kb check --duplicate-domains` exit code (repo-level commit-hook guard)."""
 
@@ -251,6 +471,64 @@ class TestCheckDuplicateDomainsCmd(unittest.TestCase):
             with self._chdir(repo), contextlib.redirect_stderr(err):
                 self.assertEqual(main(["check", "--duplicate-domains"]), 1)
             self.assertIn("duplicate-domain", err.getvalue())
+
+
+class TestDomainsCompact(unittest.TestCase):
+    """`domains --compact` (core inline / vertical collapsed) and `domains <repo>` drill.
+
+    Locks the surface-aware rendering the session-start KB hook depends on, so a
+    silent feature drop can't recur."""
+
+    def _build(self, base: Path) -> Path:
+        for repo, dom in (("core-kb", "alpha"), ("vert-kb", "beta")):
+            d = base / repo / dom
+            d.mkdir(parents=True)
+            (d / "INDEX.md").write_text(f"# {dom}\n")
+        reg = base / "kb-sources.toml"
+        reg.write_text(
+            f'workspace_root = "{base}"\n'
+            '[[source]]\nname = "core-kb"\nsurface = "core"\n'
+            '[[source]]\nname = "vert-kb"\nsurface = "vertical"\n'
+        )
+        return reg
+
+    def _run(self, argv, reg, base):
+        env = {"KB_SOURCES": str(reg), "KB_WORKSPACE_ROOT": str(base)}
+        out = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, env),
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            rc = main(argv)
+        return rc, out.getvalue()
+
+    def test_compact_core_inline_vertical_collapsed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            reg = self._build(base)
+            rc, out = self._run(["domains", "--compact"], reg, base)
+            self.assertEqual(rc, 0)
+            self.assertIn("alpha", out)  # core domain shown inline
+            self.assertIn("vertical(", out)  # vertical collapsed to a name line
+            self.assertIn("vert-kb", out)
+            self.assertNotIn("beta", out)  # vertical domain NOT expanded
+
+    def test_drill_one_repo_shows_its_domains(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            reg = self._build(base)
+            rc, out = self._run(["domains", "vert-kb"], reg, base)
+            self.assertEqual(rc, 0)
+            self.assertIn("beta", out)
+            self.assertNotIn("alpha", out)
+
+    def test_unknown_repo_returns_2(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            reg = self._build(base)
+            rc, _ = self._run(["domains", "nope"], reg, base)
+            self.assertEqual(rc, 2)
 
 
 if __name__ == "__main__":
