@@ -216,6 +216,55 @@ def test_no_frontmatter_loud_skip(tmp_path: Path) -> None:
     assert "d/plain.md" in skipped
 
 
+def test_legacy_raw_compile_without_index_or_frontmatter(tmp_path: Path) -> None:
+    (tmp_path / "notes" / "plain.md").parent.mkdir(parents=True)
+    (tmp_path / "notes" / "plain.md").write_text(
+        "# Raw note\n\n旧材料正文。\n", encoding="utf-8"
+    )
+    _note(
+        tmp_path / "with-fm.md",
+        "---\ndescription: old desc\nkeywords: [LegacyKW]\n---\n# FM note\nbody\n",
+    )
+    out = compile_repo("legacy-repo", tmp_path, legacy=True)
+    assert out.report.domains == ["legacy"]
+    assert out.report.skipped == []
+    assert out.report.indexed == 2
+
+    raw = next(d for d in out.docs if d.source_path == "notes/plain.md")
+    assert (
+        raw.identity == "legacy-repo:legacy:notes/plain"
+    )  # registry name, 不取磁盘 basename
+    assert raw.domain == "legacy"
+    assert raw.domain_prefixes == ["legacy"]
+    assert raw.kind == "note"
+    assert raw.kind_explicit is True
+    assert "LEGACY RAW UNVERIFIED" in raw.description
+    assert "LEGACY RAW UNVERIFIED" in raw.body_text
+
+    with_fm = next(d for d in out.docs if d.source_path == "with-fm.md")
+    assert "old desc" in with_fm.description
+    assert "legacykw" in with_fm.keywords
+    assert {"legacy", "raw", "unverified"} <= set(with_fm.keywords)
+
+
+def test_repo_identity_uses_registry_name_not_basename(tmp_path: Path) -> None:
+    """caveat-A 回归防线: 物理目录名(leaf) != registry name 时,
+
+    identity / repo / canonical_repo / 落盘子目录全部用 registry name, 不取磁盘
+    basename。生产名常 name==leaf, 物理数据测不出"读 leaf"的回归 → 必须用
+    name≠leaf 的合成 fixture 钉死。
+    """
+    leaf_dir = tmp_path / "bar"  # 物理 leaf = "bar"
+    _index(leaf_dir / "d" / "INDEX.md")
+    _note(leaf_dir / "d" / "note.md")
+    out = compile_repo("foo", leaf_dir)  # registry name = "foo" ≠ leaf "bar"
+    assert out.canonical_repo == "foo"
+    doc = next(d for d in out.docs if d.source_path == "d/note.md")
+    assert doc.repo == "foo"
+    assert doc.identity == "foo:d:note"
+    assert "bar" not in doc.identity  # 物理 leaf 绝不泄漏进 identity
+
+
 def test_v3_compat_fields(tmp_path: Path) -> None:
     _index(tmp_path / "d" / "INDEX.md")
     v3 = (
@@ -468,6 +517,24 @@ def test_kind_missing_recorded(tmp_path: Path) -> None:
     assert "kind missing" in out.report.render()
 
 
+def test_kind_missing_not_loud_for_lifecycle_statuses(tmp_path: Path) -> None:
+    _index(tmp_path / "d" / "INDEX.md")
+    _note(
+        tmp_path / "d" / "raw.md",
+        "---\nstatus: raw\n---\n# raw\nbody\n",
+    )
+    _note(
+        tmp_path / "d" / "derived.md",
+        "---\nstatus: derived\n---\n# derived\nbody\n",
+    )
+    _note(
+        tmp_path / "d" / "canonical.md",
+        "---\nstatus: canonical\n---\n# canonical\nbody\n",
+    )
+    out = compile_repo("repo", tmp_path)
+    assert out.report.kind_missing == []
+
+
 def test_kind_present_is_explicit(tmp_path: Path) -> None:
     _index(tmp_path / "d" / "INDEX.md")
     _note(tmp_path / "d" / "a.md")  # FM 模板带 kind: reference
@@ -498,3 +565,24 @@ def test_kind_explicit_in_compiled_json(tmp_path: Path) -> None:
     out = compile_repo("repo", tmp_path)
     doc = next(d for d in out.docs if d.source_path == "d/a.md")
     assert json.loads(doc_to_json(doc))["kind_explicit"] is True
+
+
+def test_status_is_optional_and_projected(tmp_path: Path) -> None:
+    _index(tmp_path / "d" / "INDEX.md")
+    _note(
+        tmp_path / "d" / "unclassified.md",
+        '---\ndescription: "待分类材料"\nkeywords: [unclassified]\n'
+        'kind: note\nstatus: unclassified\n---\n\n# T\n\n正文。\n',
+    )
+    out = compile_repo("repo", tmp_path)
+    doc = next(d for d in out.docs if d.source_path == "d/unclassified.md")
+    assert doc.status == "unclassified"
+    assert json.loads(doc_to_json(doc))["status"] == "unclassified"
+
+
+def test_status_absent_is_not_inferred(tmp_path: Path) -> None:
+    _index(tmp_path / "d" / "INDEX.md")
+    _note(tmp_path / "d" / "old.md")
+    out = compile_repo("repo", tmp_path)
+    doc = next(d for d in out.docs if d.source_path == "d/old.md")
+    assert doc.status == ""

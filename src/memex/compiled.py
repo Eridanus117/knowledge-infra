@@ -50,6 +50,7 @@ def load_compiled_docs(repo_dir: Path) -> list[Doc]:
             kind_explicit=bool(d.get("kind_explicit", True)),
             source_hash=d.get("source_hash") or None,
             compiled_hash=d.get("compiled_hash") or None,
+            status=str(d.get("status") or ""),
         )
     return list(docs.values())
 

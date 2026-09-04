@@ -1,12 +1,12 @@
 [build-system]
 # uv_build: 纯 Python 甜区。命中 C/Rust 扩展 / build hook / VCS 动态版本 /
 # 隐式 namespace 包(无 __init__.py) 任一 → 换 hatchling。
-requires = ["uv_build>=0.11.19,<0.12"]
+requires = ["uv_build>=0.11.25,<0.12"]
 build-backend = "uv_build"
 
 [project]
 name = "memex"
-version = "0.1.0"
+version = "0.1.8"
 description = "Local-first KB hybrid retrieval engine (lexical BM25 + semantic qdrant + hybrid RRF)."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -14,10 +14,10 @@ license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Eridanus" }]
 classifiers = [
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
+    "gnomon @ git+https://github.com/source-gamma/gnomon.git@1e949bcd22cdfd1f2459dbf43b7f6f03ab31d781",
     "typer>=0.12",
     "pydantic-settings>=2.0",
     "structlog>=24.0",
@@ -31,17 +31,17 @@ memex = "memex.cli:run"
 memex-sync = "memex.indexing.cli:run"
 
 [dependency-groups]
-# ruff/pyrefly 不入此组: 走全局 uv tool 装一次 (各仓 .venv 只剩纯 Python, 避免每个
-# 新仓 sync 都拉原生二进制触发本地安全软件重扫)。一次性: uv tool install ruff pyrefly
+# ruff/pyrefly 不入此组: 可按需用 uv tool 全局安装。
 dev = [
     "pytest>=8.0",
     "pytest-cov",
     "pytest-mock",
     "pytest-randomly",
     "poethepoet",
+    "pyrefly>=1.1.1",
 ]
-# 出单文件 binary (脱 Python, 本地安全软件只需放行一次): uv run --group freeze poe freeze
-freeze = ["pyinstaller>=6.0"]
+# 出自包含 binary: ./scripts/build-release.sh
+freeze = ["pyinstaller>=6.0,<7"]
 
 [tool.poe.tasks]
 lint = "uvx ruff@0.15.16 check ."
@@ -49,18 +49,21 @@ fmt = "uvx ruff@0.15.16 format ."
 typecheck = "pyrefly check"
 test = "pytest"
 check = { sequence = ["lint", "typecheck", "test"], help = "lint + typecheck + test" }
-freeze = { cmd = "pyinstaller --onefile --clean --name memex src/memex/cli.py", help = "打单文件 binary 到 dist/" }
-
-[tool.ruff]
-line-length = 88
-target-version = "py312"
+freeze = { cmd = "./scripts/build-release.sh", help = "build self-contained memex and memex-sync release binaries" }
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RUF"]
-ignore = ["E501"]
+# TRY003: 禁止在 raise 处带消息是 opinionated 风格(逼每种错都建专用异常类),
+# 与"消息含运行时上下文的 f-string raise"惯用法冲突; TRY 组其余规则(空 except /
+# raise-from / try-else 等真问题)仍保留。
+extend-ignore = ["E501", "TRY003"]
 
-[tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
+[tool.ruff.lint.extend-per-file-ignores]
+# PLR2004: 测试里直接断言字面量(状态码/长度/计数)是惯用法, 不是魔数。
+# ARG: fake/mock 的方法与 lambda 要匹配真实接口签名, 未用形参是刻意保留。
+# S101: 测试里用 assert 是惯用法。
+"tests/**" = ["S101", "PLR2004", "ARG"]
+# typer 命令的每个 CLI 选项就是一个参数, 参数多是框架惯用法, 不是 PLR0913 真问题
+"**/cli.py" = ["PLR0913"]
 
 [tool.ruff.lint.flake8-bugbear]
 # typer 的 x = typer.Option(...) 默认值是惯用法, 不是 B008 真问题

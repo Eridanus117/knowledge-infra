@@ -9,11 +9,13 @@ import typer
 from memex import telemetry
 
 
-def _rec(verb: str, exit_code: int = 0, duration_ms: int = 10, err: str = "") -> dict:
+def _rec(
+    command: str, exit_code: int = 0, duration_ms: int = 10, err: str = ""
+) -> dict:
     return {
         "ts": "2026-01-01T00:00:00.000+00:00",
         "pid": 1,
-        "verb": verb,
+        "command_path": [command],
         "args": [],
         "exit_code": exit_code,
         "duration_ms": duration_ms,
@@ -103,7 +105,9 @@ def test_verb_skips_leading_flags(tmp_path: Path) -> None:
 
     db = tmp_path / "v.db"
     assert (
-        telemetry.run_instrumented(app, ["--verbose", "sync"], prog_name="t", path=db)
+        telemetry.run_instrumented(
+            app, ["--verbose", "sync"], command_path=["sync"], prog_name="t", path=db
+        )
         == 0
     )
     assert "sync" in telemetry.stats(path=db)
@@ -184,7 +188,9 @@ def test_concurrent_writes(tmp_path: Path) -> None:
     conn = telemetry._connect(db)
     try:
         total = conn.execute("SELECT count(*) FROM calls").fetchone()[0]
-        hits = conn.execute("SELECT count(*) FROM calls WHERE verb='hit'").fetchone()[0]
+        hits = conn.execute(
+            "SELECT count(*) FROM calls WHERE command_path='[\"hit\"]'"
+        ).fetchone()[0]
     finally:
         conn.close()
     assert hits == per_proc * n_proc  # no lost writes under contention

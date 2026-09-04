@@ -34,14 +34,23 @@ class RecallHit:
     object_key: str
     repo: str
     title: str
-    path: str
+    path: str  # 仓相对 POSIX 路径(source_path)
     score: float
     lexical_rank: int | None
     semantic_rank: int | None
+    # 磁盘绝对路径(registry repo 根 + path), 让 agent 召回后可直接 Read。空 = 无法解析
+    # (repo 不在 registry / path 缺失)。读路径富化。
+    abs_path: str = ""
+    # 正文摘要片段(单行, 截断), 供召回后判相关性;默认空, 仅 with-preview 时填。
+    preview: str = ""
     # False = 仅 lexical(无向量, 未索引);None = 未检查/检查失败。
     semantic_indexed: bool | None = None
-    # True = 命中来自 legacy 仓(迁移期, 内容未经实地核验)。
+    # True = 命中来自 legacy/raw 仓(迁移期, 内容未经实地核验)。
     legacy: bool = False
+    raw: bool = False
+    unverified: bool = False
+    # frontmatter 明确声明的生命周期/分类状态；空值表示旧文档未声明。
+    status: str = ""
 
 
 @dataclass(frozen=True)
@@ -115,13 +124,15 @@ def _check_semantic_indexed(
     return {key: (pid in found) for pid, key in ids.items()}, None
 
 
-def recall(
+def recall(  # noqa: C901, PLR0912, PLR0913, PLR0915 — lane 分派(lexical/semantic/hybrid)+ facet 校验 + 健康采集编排; 单一检索入口, 拆分会把 lane 路由逻辑打散
     text: str,
     *,
     limit: int = 10,
     repo: str | None = None,
     lane: str = "hybrid",
     facets: Facets | None = None,
+    with_preview: bool = False,
+    preview_chars: int = 160,
 ) -> RecallResult:
     if facets and not settings.read_from_central:
         # legacy artifact 无 facet 字段, 静默空结果会撒谎 → 大声拒绝。
@@ -168,28 +179,45 @@ def recall(
             fusion = "lexical_only"
             hits = _resolve_engine("lexical").search(text, **kwargs)
 
-    legacy_repos = load_source_registry().legacy
+    reg = load_source_registry()
+    legacy_repos = reg.legacy
+    repo_roots = reg.repos  # repo name → 磁盘根(拼绝对路径用)
     out: list[RecallHit] = []
     for h in hits:
         d = docs.get((h.repo, h.object_key))
         sr = getattr(h, "semantic_rank", None)
+        is_legacy = h.repo in legacy_repos
+        path = getattr(d, "path", "") if d else getattr(h, "path", "")
+        root = repo_roots.get(h.repo)
+        abs_path = str(root / path) if (root is not None and path) else ""
+        preview = ""
+        if with_preview and d is not None:
+            body = getattr(d, "body", "") or ""
+            preview = " ".join(body.split())[:preview_chars]
         out.append(
             RecallHit(
                 object_key=h.object_key,
                 repo=h.repo,
                 title=(getattr(d, "title", "") if d else getattr(h, "title", "")),
-                path=(getattr(d, "path", "") if d else getattr(h, "path", "")),
+                path=path,
                 score=round(float(h.score), 6),
                 lexical_rank=getattr(h, "lexical_rank", None),
                 semantic_rank=sr,
                 semantic_indexed=True if sr is not None else None,
-                legacy=h.repo in legacy_repos,
+                legacy=is_legacy,
+                raw=is_legacy,
+                unverified=is_legacy,
+                status=getattr(d, "status", "") if d else "",
+                abs_path=abs_path,
+                preview=preview,
             )
         )
-    # legacy 命中在消费时刻大声标注。
+    # legacy/raw 命中在消费时刻大声标注。
     n_legacy = sum(1 for h in out if h.legacy)
     if n_legacy:
-        notes.append(f"{n_legacy} hit(s) 来自 legacy 仓(未经实地核验) — 以实地核验为准")
+        notes.append(
+            f"{n_legacy} hit(s) 来自 legacy/raw 仓(未经实地核验) — 以实地核验为准"
+        )
 
     # 未索引标注(central + semantic 可用时;降级时 qdrant 状态未知, 不再追打)。
     unindexed = 0

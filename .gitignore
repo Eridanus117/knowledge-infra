@@ -9,6 +9,16 @@ build/
 .coverage
 htmlcov/
 .pyrefly_cache/
+.codegraph/
 .env
+*.db
+*.sqlite
+*.sqlite3
+.repo-release-gate.local.toml
+.source-beta-release-gate.local.toml
+
+# Local assistant guidance kept outside release artifacts
 AGENTS.md
 CLAUDE.md
+
+eval/results/

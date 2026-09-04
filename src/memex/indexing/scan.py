@@ -115,7 +115,7 @@ def _nearest_domain(
     while True:
         if cur in by_dir:
             return by_dir[cur]
-        if cur == root or cur.parent == cur:
+        if cur in (root, cur.parent):
             return None
         cur = cur.parent
 
@@ -201,6 +201,49 @@ def scan_notes(
             slug=slug,
             identity=identity,
             is_index=is_index,
+        )
+        folded = _fold(identity)
+        if folded in seen_fold:
+            prev = seen_fold[folded]
+            raise ScanError(
+                f"identity collision in {repo} after NFC+casefold: {identity!r} "
+                f"({prev.source_path} 与 {note.source_path}, C3 守卫拒绝)"
+            )
+        seen_fold[folded] = note
+        out.append(note)
+    return out
+
+
+def scan_legacy_notes(repo: str, repo_root: Path) -> list[ScannedNote]:
+    """扫描 legacy/raw source 的全部 markdown。
+
+    legacy source 不要求 INDEX.md 域树；所有 .md 统一落到 `legacy` 域。
+    这条路径只由 source-level `legacy = true` 触发，不放宽普通 KB 的 C1/C2 闸门。
+    """
+    repo_root = repo_root.resolve()
+    node = DomainNode(
+        domain="legacy",
+        prefixes=("legacy",),
+        index_path=repo_root / INDEX_FILENAME,
+        dir=repo_root,
+    )
+    out: list[ScannedNote] = []
+    seen_fold: dict[str, ScannedNote] = {}
+    for md in sorted(repo_root.rglob("*.md")):
+        rel = md.relative_to(repo_root)
+        rel_parts = rel.parts
+        if any(part in _SKIP_DIRS or part.startswith(".") for part in rel_parts[:-1]):
+            continue
+        posix = rel.as_posix()
+        slug = posix[: -len(".md")] if posix.endswith(".md") else posix
+        identity = derive_identity(repo, node.domain, slug)
+        note = ScannedNote(
+            path=md,
+            source_path=posix,
+            node=node,
+            slug=slug,
+            identity=identity,
+            is_index=md.name == INDEX_FILENAME,
         )
         folded = _fold(identity)
         if folded in seen_fold:

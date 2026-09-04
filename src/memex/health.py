@@ -47,7 +47,7 @@ class HealthCollector:
     stale_drops: list[StaleDrop] = field(default_factory=list)
 
 
-def stale_drop_reason(hit: SemanticHit, doc: Doc | None) -> str | None:
+def stale_drop_reason(hit: SemanticHit, doc: Doc | None) -> str | None:  # noqa: PLR0911 — guard-clause ladder: 每个 return 是一条独立 stale 判据, 合并会更难读
     """semantic 候选的 stale 判定;None = 新鲜保留。
 
     legacy 形状(payload 无 unit_mode 且无 text_hash)整体 no-op —— 迁移期, 不背 gate。

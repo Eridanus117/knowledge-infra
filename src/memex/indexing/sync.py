@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from itertools import batched
 from pathlib import Path
@@ -41,6 +42,39 @@ POINT_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "memex:point-id:v1")
 _RETRIEVE_BATCH = 256
 _SCROLL_PAGE = 256
 
+# 渲染时每个清单最多逐条列出多少项, 超出折叠成 "... 共 N 篇"。
+_RENDER_LIST_CAP = 20
+
+# 待删点占本仓现存点的比例超过此阈值即触发 mass-prune 守卫(需 --force 放行)。
+_MASS_PRUNE_RATIO = 0.5
+_PLAN_PROGRESS_EVERY = 25
+
+ProgressFn = Callable[[str], None]
+
+PAYLOAD_INDEX_FIELDS: tuple[str, ...] = (
+    "domain_prefixes",
+    "kind",
+    "status",
+    "point_kind",
+    "text_hash",
+    "embedding_profile",
+    "index_profile",
+    "unit_mode",
+)
+
+
+@dataclass(frozen=True)
+class SyncMode:
+    """单仓 sync 的写入策略。默认 dry-run(零写入);apply 真写, force 放行 mass-prune 守卫。"""
+
+    apply: bool = False
+    force: bool = False
+
+
+# frozen → 可安全共享为默认参数 singleton(避开 B008 的可变默认陷阱)。
+_DRY_RUN = SyncMode()
+
+
 # payload 全字段(C5 + text_hash;比较/覆盖都以此为准)。
 PAYLOAD_KEYS: tuple[str, ...] = (
     "identity",
@@ -48,6 +82,7 @@ PAYLOAD_KEYS: tuple[str, ...] = (
     "domain_prefixes",
     "kind",
     "kind_explicit",
+    "status",
     "keywords",
     "source_path",
     "source_hash",
@@ -96,6 +131,9 @@ def build_payload(doc: CompiledDoc, text_hash: str) -> dict[str, Any]:
     }
     if doc.commit_time is not None:
         payload["commit_time"] = doc.commit_time
+    # 缺 status 不写入 payload, 保持旧文档“未声明”而非伪造 canonical。
+    if doc.status:
+        payload["status"] = doc.status
     return payload
 
 
@@ -107,13 +145,13 @@ def _payload_view(payload: dict[str, Any]) -> dict[str, Any]:
 def ensure_collection(client: Qdrant, s: Settings = settings) -> None:
     """不存在则建中央 collection(named vector object/4096/Cosine)+ payload index。
 
-    payload index 只在新建时创建(domain_prefixes/kind/point_kind keyword)。
+    payload index 创建为幂等操作:既覆盖新 collection 初始化,也允许 apply 路径给
+    存量 collection 补非破坏性索引。
     """
     name = s.central_collection
-    if client.collection_exists(name):
-        return
-    client.create_collection(name, VECTOR_FIELD, s.embedding_dimensions)
-    for fld in ("domain_prefixes", "kind", "point_kind"):
+    if not client.collection_exists(name):
+        client.create_collection(name, VECTOR_FIELD, s.embedding_dimensions)
+    for fld in PAYLOAD_INDEX_FIELDS:
         client.create_payload_index(name, fld, "keyword")
 
 
@@ -151,7 +189,7 @@ class SyncReport:
             f"prune候选 {len(self.prune_candidates)}, 失败 {len(self.failures)}"
         )
 
-    def render(self) -> str:
+    def render(self) -> str:  # noqa: C901 — 报告渲染: 逐 section 拼装文本行, 分支多但线性、无嵌套逻辑
         lines = [f"--- sync {self.summary_line()}"]
         if self.error:
             return "\n".join(lines)
@@ -164,8 +202,8 @@ class SyncReport:
         ):
             if items:
                 lines.append(f"  {label} [{len(items)}]:")
-                lines.extend(f"    - {x}" for x in items[:20])
-                if len(items) > 20:
+                lines.extend(f"    - {x}" for x in items[:_RENDER_LIST_CAP])
+                if len(items) > _RENDER_LIST_CAP:
                     lines.append(f"    ... 共 {len(items)} 篇")
         if self.prune_candidates:
             lines.append(f"  prune 候选 [{len(self.prune_candidates)}]:")
@@ -253,69 +291,96 @@ def _find_reusable_vector(
     return vec if isinstance(vec, list) else None
 
 
-def sync_repo(
+def sync_repo(  # noqa: C901, PLR0911, PLR0912, PLR0913, PLR0915 — compile→diff→embed→prune 守卫→落盘的单仓 sync 编排; dry-run/apply/force 多路径耦合, 强拆会割裂事务语义
     name: str,
     repo_root: Path,
     *,
     client: Qdrant | None = None,
     s: Settings = settings,
-    apply: bool = False,
-    force: bool = False,
+    mode: SyncMode = _DRY_RUN,
+    legacy: bool = False,
+    progress: ProgressFn | None = None,
 ) -> tuple[CompileOutput, SyncReport]:
     """compile + qdrant sync 一个源仓。默认 dry-run(零写入, 含不建 collection)。"""
+
+    def emit(message: str) -> None:
+        if progress is not None:
+            progress(f"sync {name}: {message}")
+
+    apply, force = mode.apply, mode.force
     client = client if client is not None else Qdrant(s)
-    out = compile_repo(name, repo_root)
+    emit(f"compile start ({repo_root})")
+    out = compile_repo(name, repo_root, legacy=legacy)
     coll = s.central_collection
     report = SyncReport(repo=out.canonical_repo, collection=coll, dry_run=not apply)
+    emit(f"compile done: {len(out.docs)} doc(s), collection={coll}")
 
     if out.report.error or out.report.duplicate_error:
         report.error = out.report.error or out.report.duplicate_error
+        emit(f"compile error: {report.error}")
         return out, report
     if not out.docs:
         report.notes.append("0 篇可索引 doc, 无事可做")
+        emit("no indexable docs")
         return out, report
 
     try:
+        emit("checking qdrant collection")
         exists = client.collection_exists(coll)
     except QdrantError as exc:
         report.error = f"qdrant 不可达: {exc}"
+        emit(f"qdrant collection check failed: {exc}")
         return out, report
 
-    if not exists:
-        if apply:
-            try:
-                ensure_collection(client, s)
-            except QdrantError as exc:
-                report.error = f"建 collection 失败: {exc}"
-                return out, report
+    if apply:
+        try:
+            action = "ensuring" if exists else "creating"
+            emit(f"{action} qdrant collection/payload indexes")
+            ensure_collection(client, s)
             exists = True
-        else:
-            report.notes.append(
-                f"collection {coll} 不存在; --apply 时将创建"
-                f"(named vector {VECTOR_FIELD}/{s.embedding_dimensions}/Cosine "
-                "+ payload index domain_prefixes/kind/point_kind)"
-            )
+        except QdrantError as exc:
+            report.error = f"建 collection/index 失败: {exc}"
+            emit(f"qdrant collection/index ensure failed: {exc}")
+            return out, report
+    elif not exists:
+        report.notes.append(
+            f"collection {coll} 不存在; --apply 时将创建"
+            f"(named vector {VECTOR_FIELD}/{s.embedding_dimensions}/Cosine "
+            f"+ payload index {','.join(PAYLOAD_INDEX_FIELDS)})"
+        )
 
     existing_by_id: dict[str, dict[str, Any]] = {}
     repo_points: list[dict[str, Any]] = []
     if exists:
         try:
+            emit("checking unit_mode guard")
             mode_err = _assert_unit_mode(client, coll)
             if mode_err:
                 report.error = mode_err
+                emit(f"unit_mode guard failed: {mode_err}")
                 return out, report
             ids = [point_id(d.identity) for d in out.docs]
+            emit(f"retrieving existing qdrant points: {len(ids)} id(s)")
             for chunk in batched(ids, _RETRIEVE_BATCH):
                 for p in client.retrieve(coll, list(chunk)):
                     existing_by_id[str(p.get("id"))] = p
+            emit(f"scrolling repo points for prune/reuse scope: {out.canonical_repo}")
             repo_points = _scroll_repo_points(client, coll, out.canonical_repo)
+            emit(
+                f"qdrant read done: {len(existing_by_id)} direct hit(s), "
+                f"{len(repo_points)} repo point(s)"
+            )
         except QdrantError as exc:
             report.error = f"qdrant 读现状失败: {exc}"
+            emit(f"qdrant read failed: {exc}")
             return out, report
 
     # ---- 逐篇决策(读阶段;单篇失败记录 + 继续) ----
     plan = _Plan()
-    for doc in out.docs:
+    emit(f"planning doc actions: {len(out.docs)} doc(s)")
+    for idx, doc in enumerate(out.docs, start=1):
+        if idx == 1 or idx % _PLAN_PROGRESS_EVERY == 0 or idx == len(out.docs):
+            emit(f"planning doc actions {idx}/{len(out.docs)}")
         try:
             pid = point_id(doc.identity)
             th = doc_text_hash(doc)
@@ -342,6 +407,12 @@ def sync_repo(
                 report.embedded.append(doc.identity)
         except QdrantError as exc:
             report.failures.append((doc.identity, str(exc)))
+            emit(f"planning failed for {doc.identity}: {exc}")
+    emit(
+        "plan done: "
+        f"embed={len(plan.embed)}, re-key={len(plan.rekey)}, "
+        f"payload={len(plan.set_payload)}, failures={len(report.failures)}"
+    )
 
     # ---- prune diff(C7 三守卫: per-repo 前缀已收窄 / >50% 拒绝 / dry-run 默认) ----
     compiled_ids = {d.identity for d in out.docs}
@@ -353,7 +424,9 @@ def sync_repo(
     report.prune_candidates = sorted(
         str((p.get("payload") or {}).get("identity")) for p in stale
     )
-    refuse_prune = bool(stale) and len(stale) * 2 > len(repo_points) and not force
+    refuse_prune = (
+        bool(stale) and len(stale) > len(repo_points) * _MASS_PRUNE_RATIO and not force
+    )
 
     def _refusal_msg(verb: str) -> str:
         # M2: 点明双份状态——新点照写、旧点未删, 运维要知道 collection 此刻是孤儿暂存态。
@@ -367,9 +440,12 @@ def sync_repo(
     if not apply:
         if refuse_prune:
             report.prune_refused = _refusal_msg("将")
+            emit("dry-run prune guard refused")
+        emit("dry-run done")
         return out, report
 
     # ---- 写阶段 ----
+    emit(f"writing payload updates: {len(plan.set_payload)}")
     for pid, payload in plan.set_payload:
         ident = str(payload.get("identity"))
         try:
@@ -379,6 +455,7 @@ def sync_repo(
             report.failures.append((ident, f"set payload: {exc}"))
 
     if plan.rekey:
+        emit(f"writing re-key upserts: {len(plan.rekey)}")
         for pid, payload, vec in plan.rekey:
             ident = str(payload.get("identity"))
             try:
@@ -390,34 +467,168 @@ def sync_repo(
                 report.rekeyed.remove(ident)
                 report.failures.append((ident, f"re-key upsert: {exc}"))
 
-    for batch in batched(plan.embed, max(1, s.embed_batch_size)):
+    sync_embedding_url = s.effective_sync_embedding_url
+    embed_batches = list(batched(plan.embed, max(1, s.embed_batch_size)))
+    if plan.embed:
+        emit(
+            f"embedding {len(plan.embed)} doc(s) in {len(embed_batches)} batch(es); "
+            f"timeout={s.embed_timeout_secs:g}s "
+            "(set KB_SEARCH_EMBED_TIMEOUT_SECS to lower while diagnosing)"
+        )
+    for batch_idx, batch in enumerate(embed_batches, start=1):
         idents = [doc.identity for doc, _, _ in batch]
         try:
-            vectors = embed_texts([doc_embed_text(doc) for doc, _, _ in batch], s)
+            emit(
+                f"embedding batch {batch_idx}/{len(embed_batches)}: {len(batch)} doc(s)"
+            )
+            vectors = embed_texts(
+                [doc_embed_text(doc) for doc, _, _ in batch],
+                s,
+                endpoint=sync_embedding_url,
+                lane="sync",
+            )
         except Exception as exc:  # embed 网络/服务错: 整批记失败, 继续下一批
+            if len(batch) > 1:
+                report.notes.append(f"embed batch {len(batch)} 失败, 已逐篇重试: {exc}")
+                for doc, pid, payload in batch:
+                    try:
+                        emit(f"embedding single retry: {doc.identity}")
+                        vec = embed_texts(
+                            [doc_embed_text(doc)],
+                            s,
+                            endpoint=sync_embedding_url,
+                            lane="sync",
+                        )[0]
+                    except Exception as single_exc:
+                        report.embedded.remove(doc.identity)
+                        report.failures.append((doc.identity, f"embed: {single_exc}"))
+                        emit(f"embedding failed for {doc.identity}: {single_exc}")
+                        continue
+                    try:
+                        client.upsert(
+                            coll,
+                            [
+                                {
+                                    "id": pid,
+                                    "vector": {VECTOR_FIELD: vec},
+                                    "payload": payload,
+                                }
+                            ],
+                        )
+                    except QdrantError as upsert_exc:
+                        report.embedded.remove(doc.identity)
+                        report.failures.append((doc.identity, f"upsert: {upsert_exc}"))
+                        emit(f"upsert failed for {doc.identity}: {upsert_exc}")
+                continue
             for ident in idents:
                 report.embedded.remove(ident)
                 report.failures.append((ident, f"embed: {exc}"))
+                emit(f"embedding failed for {ident}: {exc}")
             continue
         points = [
             {"id": pid, "vector": {VECTOR_FIELD: vec}, "payload": payload}
             for (_, pid, payload), vec in zip(batch, vectors, strict=True)
         ]
         try:
+            emit(f"upserting embedded batch {batch_idx}/{len(embed_batches)}")
             client.upsert(coll, points)
         except QdrantError as exc:
             for ident in idents:
                 report.embedded.remove(ident)
                 report.failures.append((ident, f"upsert: {exc}"))
+                emit(f"upsert failed for {ident}: {exc}")
 
     if refuse_prune:
         # 写阶段后再生成文案: new_points 取实际写成数(失败的已移出清单)。
         report.prune_refused = _refusal_msg("已")
+        emit("prune guard refused")
     elif stale:
         try:
+            emit(f"deleting stale qdrant points: {len(stale)}")
             client.delete_points(coll, [str(p.get("id")) for p in stale])
             report.pruned = list(report.prune_candidates)
         except QdrantError as exc:
             report.failures.append(("<prune>", str(exc)))
+            emit(f"prune delete failed: {exc}")
 
+    emit(
+        "apply done: "
+        f"embed={len(report.embedded)}, re-key={len(report.rekeyed)}, "
+        f"payload={len(report.payload_updated)}, pruned={len(report.pruned)}, "
+        f"failures={len(report.failures)}"
+    )
     return out, report
+
+
+@dataclass
+class RetiredQdrantPrune:
+    """central collection 里 identity repo 段 ∉ active sources 的退役点清理结果。
+
+    retired_repos = 退役的 repo 段名(去重排序);point_count = 待删/已删点数;
+    deleted=True 已真删;refused = mass-delete 守卫拒绝文案(>50% 总点, 需 --force)。
+    """
+
+    retired_repos: list[str]
+    point_count: int
+    deleted: bool = False
+    refused: str | None = None
+
+
+def prune_retired_qdrant_points(
+    client: Qdrant,
+    collection: str,
+    active_repos: set[str] | frozenset[str],
+    *,
+    apply: bool,
+    force: bool = False,
+) -> RetiredQdrantPrune:
+    """清 central collection 里 identity repo 段 ∉ active sources 的退役点。
+
+    pipeline.prune_retired_repos 的 qdrant 对偶: 改名后旧 identity(如
+    project-a:→project-kb:)的点, 单仓 sync 的 per-repo prune 只按本仓 identity 前缀
+    收窄 scope, 扫不到已退役 repo name 的点 → 永久残留成孤儿(doctor 报
+    compiled_doc_missing)。本函数全量扫 collection, 按 identity 的 repo 段
+    (split ':'[0])判退役整批删。守卫同 prune_retired_repos: 待删 >50% 总点拒绝
+    (需 force);默认 dry-run(apply=False 只报告)。
+
+    active_repos 须「全量 registry」仓名集合 —— 子集会把正常仓误判退役, 调用方须只在
+    全量 sync 路径传入。collection 不存在 → noop。
+    """
+    if not client.collection_exists(collection):
+        return RetiredQdrantPrune(retired_repos=[], point_count=0)
+    retired_ids: list[str] = []
+    retired_repos: set[str] = set()
+    total = 0
+    offset: Any = None
+    while True:
+        points, offset = client.scroll(collection, limit=_SCROLL_PAGE, offset=offset)
+        for p in points:
+            total += 1
+            identity = (p.get("payload") or {}).get("identity", "")
+            repo = identity.split(":", 1)[0] if identity else ""
+            if repo and repo not in active_repos:
+                retired_ids.append(str(p.get("id")))
+                retired_repos.add(repo)
+        if offset is None:
+            break
+    if not retired_ids:
+        return RetiredQdrantPrune(retired_repos=[], point_count=0)
+    if len(retired_ids) > total * _MASS_PRUNE_RATIO and not force:
+        verb = "将" if not apply else ""
+        return RetiredQdrantPrune(
+            retired_repos=sorted(retired_repos),
+            point_count=len(retired_ids),
+            refused=(
+                f"qdrant 待删退役点 {len(retired_ids)} > 现存 {total} 的 50%, "
+                f"拒绝删除;退役点{verb}保留, 确认无误后 --force 清理"
+            ),
+        )
+    result = RetiredQdrantPrune(
+        retired_repos=sorted(retired_repos), point_count=len(retired_ids)
+    )
+    if not apply:
+        return result
+    for batch in batched(retired_ids, _SCROLL_PAGE):
+        client.delete_points(collection, list(batch))
+    result.deleted = True
+    return result

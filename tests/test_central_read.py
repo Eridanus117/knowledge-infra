@@ -61,28 +61,77 @@ def test_load_source_repos_from_toml(
 ) -> None:
     toml = tmp_path / "kb-sources.toml"
     toml.write_text(
-        'workspace_root = "~/ws"\n'
+        'source_root = "~/projects"\n'
         '[[source]]\nname = "alpha"\n'
         '[[source]]\nname = "beta"\npath = "~/elsewhere/beta"\n',
         encoding="utf-8",
     )
     monkeypatch.setenv("KB_SOURCES", str(toml))
+    monkeypatch.delenv("KB_SOURCE_ROOT", raising=False)
     monkeypatch.delenv("KB_WORKSPACE_ROOT", raising=False)
     repos = load_source_repos()
-    assert repos["alpha"] == Path("~/ws").expanduser() / "alpha"
+    assert repos["alpha"] == Path("~/projects").expanduser() / "alpha"
     assert repos["beta"] == Path("~/elsewhere/beta").expanduser()
 
 
-def test_load_source_repos_workspace_root_env_override(
+def test_load_source_repos_source_root_env_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     toml = tmp_path / "kb-sources.toml"
     toml.write_text(
-        'workspace_root = "~/ws"\n[[source]]\nname = "alpha"\n', encoding="utf-8"
+        'source_root = "~/projects"\n[[source]]\nname = "alpha"\n',
+        encoding="utf-8",
     )
     monkeypatch.setenv("KB_SOURCES", str(toml))
-    monkeypatch.setenv("KB_WORKSPACE_ROOT", str(tmp_path / "override"))
+    monkeypatch.setenv("KB_SOURCE_ROOT", str(tmp_path / "override"))
     assert load_source_repos()["alpha"] == tmp_path / "override" / "alpha"
+
+
+def test_load_source_repos_shared_workspace_root_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    toml = tmp_path / "sources.toml"
+    toml.write_text(
+        f'workspace_root = "{tmp_path / "from-registry"}"\n'
+        '[[source]]\nname = "alpha"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KB_SOURCES", str(toml))
+    monkeypatch.delenv("KB_SOURCE_ROOT", raising=False)
+    monkeypatch.delenv("KB_WORKSPACE_ROOT", raising=False)
+    assert load_source_repos()["alpha"] == tmp_path / "from-registry" / "alpha"
+
+    monkeypatch.setenv("KB_WORKSPACE_ROOT", str(tmp_path / "from-env"))
+    assert load_source_repos()["alpha"] == tmp_path / "from-env" / "alpha"
+
+
+def test_load_source_repos_applies_sibling_local_overlay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    toml = tmp_path / "sources.toml"
+    toml.write_text(
+        f'workspace_root = "{tmp_path}"\n'
+        '[[source]]\nname = "alpha"\nlegacy = true\n'
+        '[[source]]\nname = "beta"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "sources.local.toml").write_text(
+        f'[[source]]\nname = "alpha"\npath = "{tmp_path / "local-alpha"}"\nlegacy = false\n'
+        f'[[source]]\nname = "unknown"\npath = "{tmp_path / "ignored"}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KB_SOURCES", str(toml))
+    monkeypatch.delenv("KB_SOURCE_ROOT", raising=False)
+    monkeypatch.delenv("KB_WORKSPACE_ROOT", raising=False)
+
+    from memex.registry import load_source_registry
+
+    registry = load_source_registry()
+    assert registry.repos == {
+        "alpha": tmp_path / "local-alpha",
+        "beta": tmp_path / "beta",
+    }
+    assert registry.legacy == frozenset()
 
 
 def test_load_source_repos_fallback_on_missing(
@@ -90,6 +139,21 @@ def test_load_source_repos_fallback_on_missing(
 ) -> None:
     monkeypatch.setenv("KB_SOURCES", str(tmp_path / "no-such.toml"))
     assert load_source_repos() == DEFAULT_SOURCE_REPOS
+
+
+def test_load_source_repos_default_env_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "sources"
+    toml = source_root / "kb-sources.toml"
+    toml.parent.mkdir(parents=True)
+    toml.write_text(
+        f'source_root = "{source_root}"\n[[source]]\nname = "alpha"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KB_SOURCE_ROOT", str(source_root))
+    monkeypatch.delenv("KB_SOURCES", raising=False)
+    assert load_source_repos()["alpha"] == source_root / "alpha"
 
 
 def test_load_source_repos_fallback_on_garbage(
@@ -121,7 +185,7 @@ def test_load_source_repos_skips_illegal_and_duplicate_names(
     # 含 / \ .. 或前导 ~ 的 name = 路径穿越风险, 跳过;重复 name 取首个。
     toml = tmp_path / "kb-sources.toml"
     toml.write_text(
-        'workspace_root = "~/ws"\n'
+        'source_root = "~/projects"\n'
         '[[source]]\nname = "good"\n'
         '[[source]]\nname = "../evil"\n'
         '[[source]]\nname = "a/b"\n'
@@ -131,11 +195,12 @@ def test_load_source_repos_skips_illegal_and_duplicate_names(
         encoding="utf-8",
     )
     monkeypatch.setenv("KB_SOURCES", str(toml))
+    monkeypatch.delenv("KB_SOURCE_ROOT", raising=False)
     monkeypatch.delenv("KB_WORKSPACE_ROOT", raising=False)
     repos = load_source_repos()
     assert set(repos) == {"good"}
     assert (
-        repos["good"] == Path("~/ws").expanduser() / "good"
+        repos["good"] == Path("~/projects").expanduser() / "good"
     )  # 首个 wins, sneaky 路径没生效
 
 
@@ -292,11 +357,27 @@ def _fake_sync_result(
 
 
 def _registry(
-    repos: dict[str, Path], degraded: bool = False, reason: str | None = None
+    repos: dict[str, Path],
+    degraded: bool = False,
+    reason: str | None = None,
+    legacy: frozenset[str] = frozenset(),
 ):
     from memex.registry import SourceRegistry
 
-    return SourceRegistry(repos=repos, degraded=degraded, reason=reason)
+    return SourceRegistry(repos=repos, degraded=degraded, reason=reason, legacy=legacy)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_qdrant_retire_prune(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sync-all 编排测试不触碰真生产 qdrant 的退役清理 —— 这些测试验证编排/退出码;
+    qdrant retire-prune 的逻辑由 test_sync.py 的 test_retire_qdrant_* 用 FakeQdrant 专测。
+    不隔离则 prune_retired_qdrant_points 会连真 collection、按 test 小 registry 误判退役。"""
+    from memex.indexing.sync import RetiredQdrantPrune
+
+    monkeypatch.setattr(
+        "memex.indexing.sync.prune_retired_qdrant_points",
+        lambda *a, **k: RetiredQdrantPrune(retired_repos=[], point_count=0),
+    )
 
 
 def test_sync_all_continues_and_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -326,7 +407,9 @@ def test_sync_all_continues_and_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -
     assert "qdrant 不可达" in result.stdout
 
 
-def test_sync_all_green_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sync_all_green_exits_zero(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     from memex.indexing import cli as sync_cli
 
     monkeypatch.setattr(
@@ -336,9 +419,64 @@ def test_sync_all_green_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:
         "memex.indexing.sync.sync_repo",
         lambda name, path, **kw: _fake_sync_result(name),
     )
-    result = CliRunner().invoke(sync_cli.app, ["sync-all"])
+    # --out 隔离: 退役清理扫 out_dir, 不碰生产 compiled_dir。
+    result = CliRunner().invoke(sync_cli.app, ["sync-all", "--out", str(tmp_path)])
     assert result.exit_code == 0, result.stdout
+    assert ">>> sync-all good  (/g)" in result.stdout
     assert "sync-all 汇总" in result.stdout
+
+
+def test_sync_all_qdrant_retire_error_reports_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from memex.indexing import cli as sync_cli
+    from memex.indexing.qdrant import QdrantError
+
+    monkeypatch.setattr(
+        sync_cli, "load_source_registry", lambda: _registry({"good": Path("/g")})
+    )
+    monkeypatch.setattr(
+        "memex.indexing.sync.sync_repo",
+        lambda name, path, **kw: _fake_sync_result(name),
+    )
+
+    def _raise_qdrant(*_a: Any, **_kw: Any):
+        raise QdrantError("GET /collections/c: dns")
+
+    monkeypatch.setattr(
+        "memex.indexing.sync.prune_retired_qdrant_points", _raise_qdrant
+    )
+    result = CliRunner().invoke(sync_cli.app, ["sync-all", "--out", str(tmp_path)])
+    assert result.exit_code == 1, result.stdout
+    assert "retired-qdrant-prune ERROR" in result.stdout
+    assert "总失败清单" in result.stdout
+    assert "<retired-qdrant>" in result.stdout
+    assert "sync-all 汇总" in result.stdout
+
+
+def test_sync_all_passes_legacy_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from memex.indexing import cli as sync_cli
+
+    calls: list[tuple[str, bool]] = []
+
+    def _fake_sync_repo(name: str, path: Path, **kw: Any):
+        calls.append((name, bool(kw.get("legacy"))))
+        return _fake_sync_result(name)
+
+    monkeypatch.setattr(
+        sync_cli,
+        "load_source_registry",
+        lambda: _registry(
+            {"good": Path("/g"), "old": Path("/o")}, legacy=frozenset({"old"})
+        ),
+    )
+    monkeypatch.setattr("memex.indexing.sync.sync_repo", _fake_sync_repo)
+    # --out 隔离: 退役清理扫 out_dir, 不碰生产 compiled_dir。
+    result = CliRunner().invoke(sync_cli.app, ["sync-all", "--out", str(tmp_path)])
+    assert result.exit_code == 0, result.stdout
+    assert calls == [("good", False), ("old", True)]
 
 
 def test_sync_all_prune_refused_exits_two(monkeypatch: pytest.MonkeyPatch) -> None:

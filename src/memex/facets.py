@@ -1,8 +1,9 @@
-"""Facet 收窄:domain 前缀 / kind / tag 的统一口径。
+"""Facet 收窄:domain 前缀 / kind / tag / status 的统一口径。
 
 归一只在 __post_init__ 一处,qdrant filter 与 lexical mask 消费同一值——
 防「尾斜杠两 lane 分叉」。repo 不是 facet(检索维度 = domain/kind/内容,仓是物理细节);
-敏感源不单独 carve(统一进中央 collection)。
+    敏感源不单独 carve(统一进中央 collection)。status 只做显式值精确匹配,
+    缺 status 不推断为 canonical。
 """
 
 from __future__ import annotations
@@ -23,14 +24,19 @@ class Facets:
     )
     kind: str | None = None
     tag: str | None = None  # match payload.keywords
+    status: str | None = None  # match payload.status, 只匹配显式状态
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "domain", _norm(self.domain))
         object.__setattr__(self, "kind", _norm(self.kind))
-        object.__setattr__(self, "tag", _norm(self.tag))
+        object.__setattr__(self, "status", _norm(self.status))
+        # tag 与写侧 keywords 同口径 case-fold,消除 'PM'/'pm' 漂移;
+        # domain/kind 共用 _norm 不动,只收 tag 这一维。
+        tag = _norm(self.tag)
+        object.__setattr__(self, "tag", tag.casefold() if tag else None)
 
     def __bool__(self) -> bool:
-        return any((self.domain, self.kind, self.tag))
+        return any((self.domain, self.kind, self.tag, self.status))
 
     def qdrant_must(self) -> list[dict[str, Any]]:
         """中央 collection 的 server-side 条件(domain_prefixes/kind 有 payload index)。
@@ -43,6 +49,8 @@ class Facets:
             out.append({"key": "domain_prefixes", "match": {"value": self.domain}})
         if self.kind:
             out.append({"key": "kind", "match": {"value": self.kind}})
+        if self.status:
+            out.append({"key": "status", "match": {"value": self.status}})
         if self.tag:
             out.append({"key": "keywords", "match": {"value": self.tag}})
         return out
@@ -54,5 +62,7 @@ class Facets:
         ):
             return False
         if self.kind and self.kind != getattr(doc, "kind", ""):
+            return False
+        if self.status and self.status != getattr(doc, "status", ""):
             return False
         return not (self.tag and self.tag not in (getattr(doc, "keywords", ()) or ()))
