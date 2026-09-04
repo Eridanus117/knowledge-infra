@@ -74,6 +74,10 @@ def _ascii_ident_runs(query: str) -> list[str]:
     return runs
 
 
+# 单字母大写(如句首 I/A)不算 ALL_CAPS 代码符号; 需 ≥2 字母。
+_MIN_ALL_CAPS_LEN = 2
+
+
 def _is_code_token(tok: str) -> bool:
     """代码符号 token:含 数字/`_`/`:`/`-`,或 camelCase,或 ALL_CAPS(len≥2)。"""
     if any(ch.isdigit() or ch in "_:-" for ch in tok):
@@ -82,7 +86,7 @@ def _is_code_token(tok: str) -> bool:
     has_upper = any(ch.isupper() for ch in tok)
     if has_lower and has_upper:  # camelCase / PascalCase
         return True
-    return has_upper and not has_lower and len(tok) >= 2  # ALL_CAPS
+    return has_upper and not has_lower and len(tok) >= _MIN_ALL_CAPS_LEN  # ALL_CAPS
 
 
 def code_token_count(query: str) -> int:

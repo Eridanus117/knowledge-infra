@@ -27,13 +27,23 @@ class Settings(BaseSettings):
     # collection。此处只留开关供切换。
     read_from_central: bool = True
 
-    # 语义 lane 外部服务配置(env 可覆盖)。
+    # 语义 lane 外部服务配置(env 可覆盖)。默认值面向本机开发;
+    # 生产部署通过 KB_SEARCH_* env vars 指到实际网关。
+    # embedding_url 是查询路径;sync_embedding_url 是写入向量化路径。
     qdrant_url: str = "<embedding-endpoint>"
     embedding_url: str = "<embedding-endpoint>/v1/embeddings"
+    sync_embedding_url: str | None = None
     embedding_model: str = "qwen3-embedding-8b"
     embedding_dimensions: int = 4096
     embed_timeout_secs: float = 600.0
     qdrant_timeout_secs: float = 30.0
+
+    @property
+    def effective_sync_embedding_url(self) -> str:
+        """Write-path embedding endpoint, deriving sync lane from query lane when possible."""
+        if self.sync_embedding_url:
+            return self.sync_embedding_url
+        return self.embedding_url.replace("/embedding-query/", "/embedding-sync/", 1)
 
     # 选项 2 特性开关(eval-gated):强锚定/导航 query 抬 lexical 权重,保护强
     # lexical 命中不被 RRF 融合挤出。A/B 严格 Pareto 改进 + 零回归后经评估后翻默认 ON。

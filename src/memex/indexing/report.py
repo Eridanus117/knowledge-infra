@@ -50,7 +50,7 @@ class RepoReport:
             f"kind-missing {len(self.kind_missing)}"
         )
 
-    def render(self) -> str:
+    def render(self) -> str:  # noqa: C901 — 报告渲染: 逐 section 拼装文本行, 分支多但线性、无嵌套逻辑
         """完整可读报告。"""
         lines = [f"=== {self.repo}  ({self.repo_path})"]
         if self.error:

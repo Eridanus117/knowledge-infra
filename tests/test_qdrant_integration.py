@@ -15,6 +15,7 @@ import pytest
 from memex.config import Settings
 from memex.indexing.qdrant import Qdrant
 from memex.indexing.sync import (
+    SyncMode,
     doc_embed_text,
     ensure_collection,
     point_id,
@@ -66,7 +67,7 @@ def _rand_vec() -> list[float]:
     return [random.random() for _ in range(DIM)]
 
 
-def _fake_embed(texts: list[str], s: Any = None) -> list[list[float]]:
+def _fake_embed(texts: list[str], s: Any = None, **_kwargs: Any) -> list[list[float]]:
     return [_rand_vec() for _ in texts]
 
 
@@ -134,21 +135,25 @@ def test_full_sync_apply_rerun_prune(
     _note(tmp_path / "d" / "b.md", 2)
 
     # 首灌
-    _, rep = sync_repo("itest", tmp_path, client=client, s=s, apply=True)
+    _, rep = sync_repo("itest", tmp_path, client=client, s=s, mode=SyncMode(apply=True))
     assert rep.error is None and not rep.failures
     assert len(rep.embedded) == 3
 
     # 重跑 → 全 unchanged(零 embed: boom 守门)
-    def _boom(texts: list[str], _s: Any = None) -> list[list[float]]:
+    def _boom(texts: list[str], _s: Any = None, **_kwargs: Any) -> list[list[float]]:
         raise AssertionError("不应 re-embed")
 
     monkeypatch.setattr("memex.indexing.sync.embed_texts", _boom)
-    _, rep2 = sync_repo("itest", tmp_path, client=client, s=s, apply=True)
+    _, rep2 = sync_repo(
+        "itest", tmp_path, client=client, s=s, mode=SyncMode(apply=True)
+    )
     assert len(rep2.unchanged) == 3 and not rep2.failures
 
     # 移动 b → re-key 复用现存向量(零 embed), 旧点 prune(1/3 ≤ 50%)
     (tmp_path / "d" / "b.md").rename(tmp_path / "d" / "moved.md")
-    out3, rep3 = sync_repo("itest", tmp_path, client=client, s=s, apply=True)
+    out3, rep3 = sync_repo(
+        "itest", tmp_path, client=client, s=s, mode=SyncMode(apply=True)
+    )
     repo = out3.canonical_repo
     assert rep3.rekeyed == [f"{repo}:d:moved"]
     assert rep3.pruned == [f"{repo}:d:b"]
@@ -178,7 +183,9 @@ def test_write_read_roundtrip_central_flag(
     s_write, client = scratch
     vectors: dict[str, list[float]] = {}
 
-    def _capture_embed(texts: list[str], s: Any = None) -> list[list[float]]:
+    def _capture_embed(
+        texts: list[str], s: Any = None, **_kwargs: Any
+    ) -> list[list[float]]:
         return [vectors.setdefault(t, _rand_vec()) for t in texts]
 
     monkeypatch.setattr("memex.indexing.sync.embed_texts", _capture_embed)
@@ -194,7 +201,7 @@ def test_write_read_roundtrip_central_flag(
     )
 
     out, rep = sync_repo(
-        "itest", tmp_path / "src", client=client, s=s_write, apply=True
+        "itest", tmp_path / "src", client=client, s=s_write, mode=SyncMode(apply=True)
     )
     assert rep.error is None and not rep.failures
     repo = out.canonical_repo
@@ -222,9 +229,10 @@ def test_write_read_roundtrip_central_flag(
     # repo 收窄 = identity 前缀过滤
     assert sem.search_vec(qvec, k=3, repo="不存在的仓") == []
 
-    # hybrid 融合端到端(query_vector 注入, 零 :3002)
+    # hybrid 融合端到端(query embed 被 monkeypatch 成写入向量, 零 :3002)
     hyb = HybridEngine(lexical=eng, semantic=sem)
-    hh = hyb.search("文档模板", k=3, query_vector=qvec)
+    monkeypatch.setattr(sem, "embed", lambda texts: [qvec])
+    hh = hyb.search("文档模板", k=3)
     assert hh and hh[0].object_key == widget_id
 
 
@@ -241,7 +249,9 @@ def test_recall_full_path_central_flag(
     s_write, client = scratch
     vectors: dict[str, list[float]] = {}
 
-    def _capture_embed(texts: list[str], s: Any = None) -> list[list[float]]:
+    def _capture_embed(
+        texts: list[str], s: Any = None, **_kwargs: Any
+    ) -> list[list[float]]:
         return [vectors.setdefault(t, _rand_vec()) for t in texts]
 
     monkeypatch.setattr("memex.indexing.sync.embed_texts", _capture_embed)
@@ -251,7 +261,9 @@ def test_recall_full_path_central_flag(
         '---\ndescription: "文档模板配置规则"\nkeywords: [文档模板, 配置]\n---\n\n# 文档模板\n\n文档模板正文。\n',
         encoding="utf-8",
     )
-    out, rep = sync_repo("itest", src, client=client, s=s_write, apply=True)
+    out, rep = sync_repo(
+        "itest", src, client=client, s=s_write, mode=SyncMode(apply=True)
+    )
     assert rep.error is None and not rep.failures
     repo = out.canonical_repo
     compiled_dir = tmp_path / "compiled"

@@ -1,3 +1,8 @@
+import io
+import urllib.error
+
+import pytest
+
 from memex import semantic
 from memex.config import Settings
 
@@ -26,11 +31,42 @@ def test_embed_dim_mismatch_raises(monkeypatch) -> None:
         "_post_json",
         lambda *a, **k: {"data": [{"index": 0, "embedding": [1, 1]}]},
     )
-    import pytest
-
     # 基础设施异常(含维度不符)统一转 SemanticUnavailable, recall 层据此降级。
     with pytest.raises(semantic.SemanticUnavailable):
         semantic.embed_texts(["a"], S)
+
+
+def test_embed_http_504_includes_timeout_and_env_hint(monkeypatch) -> None:
+    def _raise_504(*_args, **_kwargs):
+        raise urllib.error.HTTPError(
+            "https://embed.test/v1/embeddings",
+            504,
+            "Gateway Timeout",
+            {},
+            io.BytesIO(b'{"error":"upstream timed out"}'),
+        )
+
+    monkeypatch.setattr(semantic.urllib.request, "urlopen", _raise_504)
+    s = Settings(
+        embedding_url="https://embed.test/v1/embeddings",
+        embedding_model="test-model",
+        embedding_dimensions=3,
+        embed_timeout_secs=12,
+    )
+
+    with pytest.raises(semantic.SemanticUnavailable) as exc:
+        semantic.embed_texts(["a"], s)
+
+    msg = str(exc.value)
+    assert "embedding unreachable" in msg
+    assert "HTTP 504 Gateway Timeout" in msg
+    assert "upstream timed out" in msg
+    assert "lane=query" in msg
+    assert "endpoint=https://embed.test/v1/embeddings" in msg
+    assert "model=test-model" in msg
+    assert "batch=1" in msg
+    assert "timeout=12s" in msg
+    assert "KB_SEARCH_EMBED_TIMEOUT_SECS" in msg
 
 
 def test_search_dedups_by_object_key(monkeypatch) -> None:

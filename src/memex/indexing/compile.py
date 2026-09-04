@@ -5,7 +5,7 @@ links/code)直接取;旧 v3 尽量挖等价字段(description/keywords/kind), �
 kind 超出 enum → 降级为 note 并记入报告。
 
 C4: compiled doc = identity/repo/domain/domain_prefixes/title/description/keywords/
-kind/body_text/source_path/source_hash/compiled_hash/commit_time。落 JSON 到中央
+kind/status/body_text/source_path/source_hash/compiled_hash/commit_time。落 JSON 到中央
 数据目录(源仓零污染)。
 """
 
@@ -56,6 +56,8 @@ class CompiledDoc:
     compiled_hash: str
     commit_time: str | None
     schema: str = SCHEMA
+    # 只投影 frontmatter 明确声明的状态；空值不推断为 canonical。
+    status: str = ""
 
 
 @dataclass(frozen=True)
@@ -162,7 +164,10 @@ def compile_note(note: ScannedNote, repo_root: Path) -> CompileResult:
     body_text = body_text.strip("\n")
 
     description = _str(fm.get("description"))
-    keywords = _str_list(fm.get("keywords"))
+    # tag 索引 case-fold:消除 acronym 大小写漂移('PM'/'pm' 不再分叉)。
+    # 只 casefold keywords,不动共享 _str_list(links/code 等路径字段不能 casefold)。
+    keywords = [k.casefold() for k in _str_list(fm.get("keywords"))]
+    status = _str(fm.get("status"))
     # 缺 kind 默认 note 会静默稀释 kind prior → 记录缺失供读路径 loud。
     # 越界但给了也算 explicit: 越界已有 kind_downgrades 单独 loud。
     kind_explicit = bool(_str(fm.get("kind")))
@@ -190,6 +195,7 @@ def compile_note(note: ScannedNote, repo_root: Path) -> CompileResult:
         "keywords": keywords,
         "kind": kind,
         "kind_explicit": kind_explicit,
+        "status": status,
         "body_text": body_text,
         "source_path": note.source_path,
         "source_hash": source_hash,
@@ -213,12 +219,92 @@ def compile_note(note: ScannedNote, repo_root: Path) -> CompileResult:
         source_hash=source_hash,
         compiled_hash=compiled_hash,
         commit_time=commit_time,
+        status=status,
     )
     return CompileResult(
         note=note,
         doc=doc,
         skipped_no_frontmatter=False,
         kind_downgraded_from=downgraded_from,
+    )
+
+
+def compile_legacy_note(note: ScannedNote, repo_root: Path) -> CompileResult:
+    """编译 legacy/raw ScannedNote。
+
+    只给 source-level legacy 模式使用：不要求 frontmatter，但会把 compiled doc
+    明确标为 legacy/raw/unverified，避免旧材料被读路径误当成已整理 KB。
+    """
+    raw = note.path.read_text(encoding="utf-8", errors="replace")
+    fm: dict[str, object] | None = None
+    body_text = raw
+    try:
+        fm = parse_frontmatter(raw)
+        split = split_frontmatter(raw)
+        if split is not None:
+            body_text = split[1]
+    except FrontmatterError:
+        fm = None
+    body_text = body_text.strip("\n")
+
+    title = _title(body_text, note)
+    base_description = _str(fm.get("description")) if fm is not None else ""
+    warning = "LEGACY RAW UNVERIFIED: 仅作低可信线索，使用前必须实地核验。"
+    description_tail = base_description or title
+    description = f"{warning} {description_tail}".strip()
+
+    raw_keywords = _str_list(fm.get("keywords")) if fm is not None else []
+    keywords: list[str] = []
+    for kw in [*raw_keywords, "legacy", "raw", "unverified"]:
+        folded = kw.casefold()
+        if folded and folded not in keywords:
+            keywords.append(folded)
+    marked_body = f"{warning}\n\n{body_text}".strip()
+
+    source_hash = _sha256(raw)
+    commit_time = _git_commit_time(repo_root, note.source_path)
+    repo = note.identity.split(":", 1)[0]
+    payload: dict[str, object] = {
+        "identity": note.identity,
+        "repo": repo,
+        "domain": note.node.domain,
+        "domain_prefixes": list(note.node.prefixes),
+        "title": title,
+        "description": description,
+        "keywords": keywords,
+        "kind": DEFAULT_KIND,
+        "kind_explicit": True,
+        "status": _str(fm.get("status")) if fm is not None else "",
+        "body_text": marked_body,
+        "source_path": note.source_path,
+        "source_hash": source_hash,
+        "commit_time": commit_time,
+        "schema": SCHEMA,
+    }
+    compiled_hash = _sha256(_canonical_json(payload))
+
+    doc = CompiledDoc(
+        identity=note.identity,
+        repo=repo,
+        domain=note.node.domain,
+        domain_prefixes=list(note.node.prefixes),
+        title=title,
+        description=description,
+        keywords=keywords,
+        kind=DEFAULT_KIND,
+        kind_explicit=True,
+        body_text=marked_body,
+        source_path=note.source_path,
+        source_hash=source_hash,
+        compiled_hash=compiled_hash,
+        commit_time=commit_time,
+        status=_str(fm.get("status")) if fm is not None else "",
+    )
+    return CompileResult(
+        note=note,
+        doc=doc,
+        skipped_no_frontmatter=False,
+        kind_downgraded_from=None,
     )
 
 

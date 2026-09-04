@@ -7,7 +7,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from memex.indexing.pipeline import compile_repo, persist, prune_stale_compiled
+from memex.indexing.pipeline import (
+    compile_repo,
+    persist,
+    prune_retired_repos,
+    prune_stale_compiled,
+)
 
 FM = """---
 description: "一句话召回摘要"
@@ -119,3 +124,54 @@ def test_no_compiled_dir_noop(tmp_path: Path) -> None:
         out.docs, tmp_path / "absent", out.canonical_repo, apply=True
     )
     assert pr.stale == [] and not pr.deleted and pr.refused is None
+
+
+# ---- 整仓退役清理(改名后旧 leaf 名整目录成孤儿)-----------------------
+
+
+def _seed_repo_dir(compiled: Path, name: str, n: int = 2) -> None:
+    d = compiled / name
+    d.mkdir(parents=True)
+    for i in range(n):
+        (d / f"{name}__d__note{i}.json").write_text("{}", encoding="utf-8")
+
+
+def test_retired_repo_dir_pruned(tmp_path: Path) -> None:
+    # 不在 active sources 的整个 repo 子目录被整目录清(单篇 prune 覆盖不到此场景)。
+    compiled = tmp_path / "compiled"
+    _seed_repo_dir(compiled, "project-kb", 3)  # active
+    _seed_repo_dir(compiled, "project-a", 2)  # 退役 leaf 名孤儿
+    rp = prune_retired_repos(compiled, {"project-kb"}, apply=True)
+    assert rp.retired == ["project-a"]
+    assert rp.deleted is True
+    assert not (compiled / "project-a").exists()
+    assert (compiled / "project-kb").exists()
+
+
+def test_retired_dry_run_default_no_delete(tmp_path: Path) -> None:
+    compiled = tmp_path / "compiled"
+    _seed_repo_dir(compiled, "keep", 3)
+    _seed_repo_dir(compiled, "gone", 1)
+    rp = prune_retired_repos(compiled, {"keep"}, apply=False)
+    assert rp.retired == ["gone"]
+    assert rp.deleted is False
+    assert (compiled / "gone").exists()  # dry-run 不删
+
+
+def test_retired_mass_delete_guard_refuses(tmp_path: Path) -> None:
+    # 待删整仓目录 >50% → 拒绝, 需 --force。
+    compiled = tmp_path / "compiled"
+    _seed_repo_dir(compiled, "a", 1)
+    _seed_repo_dir(compiled, "b", 1)
+    _seed_repo_dir(compiled, "c", 1)
+    rp = prune_retired_repos(compiled, {"a"}, apply=True)  # 2/3 退役 > 50%
+    assert rp.refused is not None and "--force" in rp.refused
+    assert not rp.deleted
+    assert (compiled / "b").exists() and (compiled / "c").exists()
+    forced = prune_retired_repos(compiled, {"a"}, apply=True, force=True)
+    assert set(forced.retired) == {"b", "c"} and forced.deleted
+
+
+def test_retired_no_compiled_dir_noop(tmp_path: Path) -> None:
+    rp = prune_retired_repos(tmp_path / "absent", {"a"}, apply=True)
+    assert rp.retired == [] and not rp.deleted and rp.refused is None
