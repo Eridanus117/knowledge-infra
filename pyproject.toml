@@ -35,7 +35,7 @@ dev = [
     "pytest>=9.1.1",
     "poethepoet",
 ]
-freeze = ["pyinstaller>=6.0,<7"]
+freeze = ["pyinstaller>=6.22.2,<7"]
 
 [tool.poe.tasks]
 lint = "uvx ruff@0.15.16 check ."
