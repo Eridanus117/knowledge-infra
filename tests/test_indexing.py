@@ -384,6 +384,12 @@ def test_safe_filename() -> None:
     assert fn.endswith(".json")
     assert ":" not in fn
     assert "/" not in fn
+    identities = (
+        "knowledge:notes:两套生命周期模型",
+        "knowledge:notes:工作方法地图",
+        "knowledge:notes:主人档案",
+    )
+    assert len({safe_filename(identity) for identity in identities}) == len(identities)
 
 
 # ---- embed_text (C4) --------------------------------------------------------

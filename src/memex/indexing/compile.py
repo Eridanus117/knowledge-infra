@@ -16,6 +16,7 @@ import json
 import re
 import subprocess
 from dataclasses import asdict, dataclass
+from urllib.parse import quote
 from pathlib import Path
 
 from memex.indexing.frontmatter import (
@@ -312,14 +313,12 @@ _SLUG_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 def safe_filename(identity: str) -> str:
-    """compiled doc 文件名 = identity 安全编码 + .json。
+    """compiled doc 文件名 = identity URL 编码 + .json。
 
-    `:` 与 `/` 不能进文件名, 编成 `__` / `--`;再清理其余非安全字符。整体确定且可逆性
-    无关(回读靠 identity 字段, 不靠文件名)。
+    编码必须保持 identity 一一对应;仅把文件名不安全字符转成 percent escape。
+    直接把所有非 ASCII 字符折叠成 "_" 会让中文 identity 覆盖彼此的产物。
     """
-    s = identity.replace(":", "__").replace("/", "--")
-    s = _SLUG_SAFE_RE.sub("_", s)
-    return f"{s}.json"
+    return f"{quote(identity, safe='._-')}.json"
 
 
 def doc_to_json(doc: CompiledDoc) -> str:
