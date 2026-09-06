@@ -45,12 +45,10 @@ class DomainNode:
 def _iter_index_files(repo_root: Path):
     """递归找 INDEX.md(排除 skip 目录与隐藏目录)。
 
-    p.name == INDEX_FILENAME 兜住大小写不敏感 FS(macOS APFS): rglob 也会匹到
-    index.md, 显式过滤防 host 间域树分叉(对齐 kb 工具)。
+    显式区分大小写：Python 3.13+ 的字面 glob 在大小写不敏感文件系统上
+    可能把真实 index.md 返回成 INDEX.md，事后比较 p.name 无法识别误命中。
     """
-    for p in repo_root.rglob(INDEX_FILENAME):
-        if p.name != INDEX_FILENAME:
-            continue
+    for p in repo_root.rglob(INDEX_FILENAME, case_sensitive=True):
         rel_parts = p.relative_to(repo_root).parts
         # 跳过 skip 目录, 以及任何隐藏目录段(. 开头, 但根自身的 "" 不算)。
         if any(part in _SKIP_DIRS or part.startswith(".") for part in rel_parts[:-1]):

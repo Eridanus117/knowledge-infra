@@ -8,6 +8,9 @@ hybrid(weighted RRF) 检索。
 用户本地数据目录,向量库和 embedding endpoint 都通过环境变量配置。只用 lexical
 lane 时不需要外部服务。
 
+域入口文件必须精确命名为 `INDEX.md`，包括大小写；小写 `index.md` 不建立域。
+域外 Markdown 不纳入编译，真正域内缺少 frontmatter 的文件仍显式报告完整性告警。
+
 ## 入口
 
 | 命令 | 用途 |
@@ -98,7 +101,9 @@ memex-sync compile
 memex-sync sync --apply
 ```
 
-写路径默认 dry-run,只有显式传 `--apply` 才会写向量库或落盘 compiled 产物。
+`compile` 默认真实写入 compiled 产物并清理陈旧产物，不需要 `--apply`；
+只看报告必须显式加 `--dry-run`。用 `--repo name=path` 限定目标源，`--out` 必须与
+后续检索读取的 compiled 目录一致。`sync` 默认 dry-run，显式 `--apply` 才编译落盘并写向量库。
 
 低摩擦 raw 捕获和生命周期晋级:
 

@@ -97,6 +97,24 @@ def test_root_index_contributes_empty_segment(tmp_path: Path) -> None:
     )  # 与上游写入工具产出 `<repo>:contracts:...` identity 一致
 
 
+def test_lowercase_navigation_does_not_create_domain(tmp_path: Path) -> None:
+    # 人工导航和域外草稿不应扩大索引范围，真域内缺少头部的正文仍须告警。
+    _note(tmp_path / "index.md", "# 人工导航\n")
+    _note(tmp_path / "inbox" / "raw.md", "# 域外草稿\n")
+    _index(tmp_path / "notes" / "INDEX.md")
+    _note(tmp_path / "notes" / "indexed.md")
+    _note(tmp_path / "notes" / "missing.md", "# 缺少头部的知识正文\n")
+
+    result = compile_repo("knowledge", tmp_path)
+
+    assert result.report.domains == ["notes"]
+    assert {doc.identity for doc in result.docs} == {
+        "knowledge:notes:INDEX",
+        "knowledge:notes:indexed",
+    }
+    assert [entry.source_path for entry in result.report.skipped] == ["notes/missing.md"]
+
+
 def test_nested_index_node_chain(tmp_path: Path) -> None:
     _index(tmp_path / "docs" / "domain-map" / "INDEX.md")
     _index(tmp_path / "docs" / "domain-map" / "warehouse" / "INDEX.md")
