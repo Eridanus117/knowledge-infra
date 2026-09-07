@@ -6,8 +6,11 @@ safe_filename 落到 tmp, 留一部分缺失模拟孤儿。
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from memex.indexing.compile import safe_filename
 from memex.indexing.doctor import check_compiled_consistency
@@ -150,3 +153,21 @@ def test_alert_detail_front_loads_fix(tmp_path: Path) -> None:
     assert "20 个孤儿点" in head
     assert "修:" in head
     assert "…+15" in detail  # 默认只列 5 个例子 + 余量计数
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows extended-path IO")
+def test_long_compiled_path_is_not_a_false_orphan(tmp_path: Path) -> None:
+    compiled = tmp_path / ("directory" * 8) / ("nested" * 12) / ("output" * 12)
+    present = "repo:d:" + "知识" * 11
+    missing = "repo:d:missing"
+    # Seed independently of Memex's path adapter, including a >260 directory.
+    extended = Path("\\\\?\\" + str(compiled))
+    _write_compiled(extended, present)
+    report = check_compiled_consistency(
+        FakeQdrant([_pt(present), _pt(missing)]), compiled, collection=COLL
+    )
+    assert report.total_points == 2
+    assert [orphan.identity for orphan in report.orphans] == [missing]
+    assert report.orphans[0].expected_path == str(
+        compiled / "repo" / safe_filename(missing)
+    )

@@ -14,7 +14,7 @@ runner = CliRunner()
 def test_registry_parses_legacy_flag(tmp_path, monkeypatch) -> None:
     toml = tmp_path / "kb-sources.toml"
     toml.write_text(
-        f'workspace_root = "{tmp_path}"\n'
+        f'workspace_root = "{tmp_path.as_posix()}"\n'
         '[[source]]\nname = "fresh"\n'
         '[[source]]\nname = "old"\nlegacy = true\n',
         encoding="utf-8",

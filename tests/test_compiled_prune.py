@@ -7,7 +7,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from memex.compiled import load_compiled_docs
+import pytest
+
+from memex.compiled import load_compiled_corpus, load_compiled_docs
+from memex.config import Settings
+from memex.indexing.compile import safe_filename, write_compiled
 from memex.indexing.pipeline import (
     compile_repo,
     persist,
@@ -183,3 +187,53 @@ def test_retired_mass_delete_guard_refuses(tmp_path: Path) -> None:
 def test_retired_no_compiled_dir_noop(tmp_path: Path) -> None:
     rp = prune_retired_repos(tmp_path / "absent", {"a"}, apply=True)
     assert rp.retired == [] and not rp.deleted and rp.refused is None
+
+
+@pytest.mark.parametrize("deep_directory", [False, True])
+def test_long_compiled_paths_roundtrip_and_prune(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deep_directory: bool
+) -> None:
+    """Long filenames and long directory roots must survive the whole lifecycle."""
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / "source"
+    _mk_repo(root)
+    slug = "知识" * 11
+    note_path = root / "a" / f"{slug}.md"
+    (root / "a" / "x.md").rename(note_path)
+    identity = f"repo:a:{slug}"
+    filename = safe_filename(identity)
+    assert len(filename) <= 255
+    compiled = Path("compiled")
+    while len(str(tmp_path / compiled / "repo" / filename)) < 280:
+        compiled /= "nested"
+    if deep_directory:
+        while len(str(tmp_path / compiled)) < 280:
+            compiled /= "nested" * 10
+
+    out = compile_repo("repo", root)
+    persist(out.docs, compiled, "repo")
+    note = next(d for d in out.docs if d.identity == identity)
+    returned = write_compiled(note, compiled / "repo")
+    assert returned.relative_to(compiled) == Path("repo") / filename
+    settings = Settings(compiled_dir=compiled)
+    loaded = {d.object_key: d for d in load_compiled_corpus(settings)["repo"]}
+    assert set(loaded) == {d.identity for d in out.docs}
+    assert loaded[identity].path == f"a/{slug}.md"
+
+    note_path.write_text(FM + "\nUpdated searchable content.\n", encoding="utf-8")
+    updated = compile_repo("repo", root)
+    persist(updated.docs, compiled, "repo")
+    loaded = {d.object_key: d for d in load_compiled_docs(compiled / "repo")}
+    assert "Updated searchable content." in loaded[identity].body
+    note_path.unlink()
+    remaining = compile_repo("repo", root)
+    pruned = prune_stale_compiled(remaining.docs, compiled, "repo", apply=True)
+    assert pruned.deleted and pruned.refused is None
+    assert pruned.stale == [filename]
+    assert {d.object_key for d in load_compiled_docs(compiled / "repo")} == {
+        d.identity for d in remaining.docs
+    }
+
+    retired = prune_retired_repos(compiled, set(), apply=True, force=True)
+    assert retired.deleted and retired.retired == ["repo"]
+    assert load_compiled_corpus(settings) == {}

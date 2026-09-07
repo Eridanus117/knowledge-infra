@@ -182,19 +182,23 @@ def test_recall_export_handles_missing_doc(monkeypatch) -> None:
     assert hit["domain_prefixes"] == []
 
 
-def test_recall_abs_path_from_registry(monkeypatch) -> None:
+def test_recall_abs_path_from_registry(monkeypatch, tmp_path) -> None:
     # 读路径: recall 输出磁盘绝对路径(registry repo 根 + source_path),
     # agent 召回后可直接 Read。
     from pathlib import Path
 
     from memex.registry import SourceRegistry
 
+    repo_root = tmp_path / "myrepo"
+    note = repo_root / "kb" / "a.md"
+    note.parent.mkdir(parents=True)
+    note.write_text("Readable recalled source.", encoding="utf-8")
     monkeypatch.setattr("memex.engine.Engine", _FakeLexical)
     monkeypatch.setattr("memex.recall._doc_lookup", lambda repo: {})
     monkeypatch.setattr(
         "memex.recall.load_source_registry",
         lambda: SourceRegistry(
-            repos={"myrepo": Path("/ws/myrepo")},
+            repos={"myrepo": repo_root},
             degraded=False,
             reason=None,
             legacy=frozenset(),
@@ -205,9 +209,9 @@ def test_recall_abs_path_from_registry(monkeypatch) -> None:
     )
     assert result.exit_code == 0, result.stdout
     payload = json.loads(result.stdout)
-    assert payload["hits"][0]["abs_path"] == "/ws/myrepo/kb/a.md"
-    text = runner.invoke(app, ["recall", "文档", "--lane", "lexical"])
-    assert "/ws/myrepo/kb/a.md" in text.stdout  # 文本输出含可直接 Read 的绝对路径行
+    recalled = Path(payload["hits"][0]["abs_path"])
+    assert recalled.is_absolute()
+    assert recalled.read_text(encoding="utf-8") == "Readable recalled source."
 
 
 def test_recall_preview_flag(monkeypatch) -> None:

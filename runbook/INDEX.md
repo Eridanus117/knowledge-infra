@@ -7,3 +7,5 @@ kind: index
 # memex runbook
 
 memex 检索栈的诊断/操作手册:embedding 队列雪崩(:3002 超时)、sync massprune mode 切换、召回栈分诊等——症状→检查→修+失败分支。
+
+- [Windows compiled 长路径](windows-compiled-long-paths.md)：中文 identity 百分号编码触发的总路径超限、IO 边界修复与真实编译/检索/更新/清旧验收。
