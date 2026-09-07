@@ -24,6 +24,19 @@
 | `rhizome domains --diff` | 与 Qdrant 中心集合对账，看哪些 domain 尚未索引。 |
 | `rhizome adopt <repo>` | 一键纳管一个仓：写 registry 行 + INDEX 骨架 + lefthook 门禁。 |
 | `rhizome capture <text>` | 低摩擦闪念捕获：一行带时间戳 append 到 inbox（raw、出 KB 边界、不索引），之后 triage 进 `new`/source-beta。默认 `~/.config/rhizome/inbox.md`，`$RHIZOME_INBOX` 可覆盖。 |
+| `rhizome doctor --sources` | 只读检查各注册源的门禁声明、命令可解析性与 INDEX；`--json` 输出结构化报告。 |
+
+### doctor 的门禁探测
+
+`gate-present` 优先沿用源目录的 `lefthook.yml`、`.pre-commit-config.yaml`
+及既有 Python/TypeScript wrapper 探测。未命中时才询问 Git 生效的
+`pre-commit` 路径，因此支持仓内嵌套源、linked worktree 和相对或绝对
+`core.hooksPath`；被覆盖的 `.git/hooks/pre-commit` 不会成为后备证据。
+
+Git 后备只静态识别行首的 `rhizome check` 或 `exec rhizome check`，允许引号参数、
+行尾注释和 `|| exit 1`。不会执行 hook、追踪任意 shell wrapper 或证明条件分支可达；
+heredoc 和跨行引号保守不通过。Git 不可用时仍保留原配置探测，
+但没有证据就报告失败；这不是对所有 hook 框架安装或执行状态的全面审计。
 
 ## 安装
 
