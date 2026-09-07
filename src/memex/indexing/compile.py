@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import quote
 
+from memex._paths import io_path
 from memex.indexing.frontmatter import (
     FrontmatterError,
     parse_frontmatter,
@@ -327,8 +328,9 @@ def doc_to_json(doc: CompiledDoc) -> str:
 
 
 def write_compiled(doc: CompiledDoc, out_dir: Path) -> Path:
-    """落 compiled doc 到 out_dir/<safe(identity)>.json, 返回写入路径。"""
-    out_dir.mkdir(parents=True, exist_ok=True)
+    """落 compiled doc, 返回未加 Windows IO 前缀的逻辑路径。"""
+    io_dir = io_path(out_dir)
+    io_dir.mkdir(parents=True, exist_ok=True)
     dest = out_dir / safe_filename(doc.identity)
-    dest.write_text(doc_to_json(doc), encoding="utf-8")
+    (io_dir / dest.name).write_text(doc_to_json(doc), encoding="utf-8")
     return dest

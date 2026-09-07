@@ -9,6 +9,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from memex._paths import io_path
 from memex.indexing.compile import (
     CompiledDoc,
     compile_legacy_note,
@@ -163,7 +164,7 @@ def prune_stale_compiled(
     拒绝(需 force);默认 dry-run(apply=False 只报告)。文件名按 identity
     编码(自带 repo 前缀)且按仓子目录收窄, 不会误删他仓产物。
     """
-    out_dir = compiled_dir.expanduser() / repo
+    out_dir = io_path(compiled_dir.expanduser() / repo)
     if not out_dir.is_dir():
         return PruneResult(stale=[])
     expected = {safe_filename(d.identity) for d in docs}
@@ -217,7 +218,7 @@ def prune_retired_repos(
     active_repos 必须是「全量 registry」的仓名集合 —— 用 --repo 子集调用会把其余仓
     全判退役, 调用方须只在全量 sync 路径传入。
     """
-    base = compiled_dir.expanduser()
+    base = io_path(compiled_dir.expanduser())
     if not base.is_dir():
         return RetiredRepoPrune(retired=[])
     existing = sorted(p.name for p in base.iterdir() if p.is_dir())

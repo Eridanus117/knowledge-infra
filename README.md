@@ -105,6 +105,11 @@ memex-sync sync --apply
 只看报告必须显式加 `--dry-run`。用 `--repo name=path` 限定目标源，`--out` 必须与
 后续检索读取的 compiled 目录一致。`sync` 默认 dry-run，显式 `--apply` 才编译落盘并写向量库。
 
+Windows 的 compiled 读写与清理在 IO 边界使用扩展路径，支持总路径超过传统
+`MAX_PATH`，不需要重命名中文源路径或改变 identity URL 编码文件名。文件系统的
+单组件长度限制仍适用；诊断、真实长路径验收及边界见
+[`Windows compiled 长路径`](runbook/windows-compiled-long-paths.md)。
+
 低摩擦 raw 捕获和生命周期晋级:
 
 ```sh

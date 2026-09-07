@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from memex._paths import io_path
 from memex.artifacts import Doc
 from memex.config import Settings, settings
 
@@ -20,7 +21,7 @@ COMPILED_SCHEMA = "kb-note-v1"
 def load_compiled_docs(repo_dir: Path) -> list[Doc]:
     """加载一个仓的 compiled 目录 → 去重 Doc 列表(按 identity)。"""
     docs: dict[str, Doc] = {}
-    for f in sorted(repo_dir.glob("*.json")):
+    for f in sorted(io_path(repo_dir).glob("*.json")):
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -57,7 +58,7 @@ def load_compiled_docs(repo_dir: Path) -> list[Doc]:
 
 def load_compiled_corpus(s: Settings = settings) -> dict[str, list[Doc]]:
     """{repo: docs} —— 扫 compiled_dir 子目录(子目录名 = 规范仓名, sync 产出)。"""
-    base = s.compiled_dir.expanduser()
+    base = io_path(s.compiled_dir.expanduser())
     if not base.is_dir():
         return {}
     out: dict[str, list[Doc]] = {}

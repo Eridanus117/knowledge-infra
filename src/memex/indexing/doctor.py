@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from memex._paths import io_path
 from memex.indexing.compile import safe_filename
 from memex.indexing.qdrant import Qdrant, QdrantError
 from memex.indexing.sync import INDEX_PROFILE, POINT_KIND
@@ -97,6 +98,7 @@ def check_compiled_consistency(
     逐点核对 <compiled_dir>/<repo>/<safe(identity)>.json 是否在盘。"""
     report = ConsistencyReport(collection=collection)
     cdir = compiled_dir.expanduser()
+    io_dir = io_path(cdir)
     flt = {
         "must": [
             {"key": "point_kind", "match": {"value": POINT_KIND}},
@@ -119,15 +121,15 @@ def check_compiled_consistency(
                     continue  # 非受管/畸形点不计入对账
                 report.total_points += 1
                 repo = ident.split(":", 1)[0]
-                path = cdir / repo / safe_filename(ident)
-                if not path.exists():
+                filename = safe_filename(ident)
+                if not (io_dir / repo / filename).exists():
                     src = pl.get("source_path")
                     report.orphans.append(
                         OrphanPoint(
                             identity=ident,
                             repo=repo,
                             source_path=src if isinstance(src, str) else None,
-                            expected_path=str(path),
+                            expected_path=str(cdir / repo / filename),
                         )
                     )
             if offset is None:
