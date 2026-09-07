@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -51,7 +52,7 @@ class TestRunNew(unittest.TestCase):
                 res["identity"], f"{root.name}:design:kb-frontmatter-contract"
             )
             self.assertEqual(res["kind"], "reference")
-            text = dest.read_text()
+            text = dest.read_text(encoding="utf-8")
             self.assertIn('description: "the new 5-field §存 contract"', text)
             self.assertIn("kind: reference", text)
             self.assertIn("links: [adr-003]", text)
@@ -147,7 +148,7 @@ class TestRunNew(unittest.TestCase):
                 body="# Asset decision\n\nbody\n",
                 cwd=d,
             )
-            text = Path(res["path"]).read_text()
+            text = Path(res["path"]).read_text(encoding="utf-8")
             self.assertIn("kind: decision", text)
             self.assertIn(
                 'assets: ["repo:service@main", "svc:com.example.Service#run(Long)"]',
@@ -242,9 +243,11 @@ class TestNewBodyInput(unittest.TestCase):
         args = argparse.Namespace(body_file=None)
         with tempfile.TemporaryDirectory() as tmp:
             bf = Path(tmp) / "body.md"
-            bf.write_text("# Title\n\n$X `code` )unbalanced( — CJK，标点\n")
+            bf.write_text(
+                "# Title\n\n$X `code` )unbalanced( — CJK，标点\n", encoding="utf-8"
+            )
             args.body_file = str(bf)
-            self.assertEqual(_read_new_body(args), bf.read_text())
+            self.assertEqual(_read_new_body(args), bf.read_text(encoding="utf-8"))
 
     def test_body_file_dash_reads_stdin(self):
         args = argparse.Namespace(body_file="-")
@@ -322,7 +325,7 @@ class TestNewBodyInput(unittest.TestCase):
             self.assertEqual(rc, 0)
             note = d / "via-file.md"
             self.assertTrue(note.exists())
-            self.assertIn("body via file", note.read_text())
+            self.assertIn("body via file", note.read_text(encoding="utf-8"))
 
     def test_empty_body_message_mentions_body_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -486,9 +489,10 @@ class TestDomainsCompact(unittest.TestCase):
             (d / "INDEX.md").write_text(f"# {dom}\n")
         reg = base / "kb-sources.toml"
         reg.write_text(
-            f'workspace_root = "{base}"\n'
+            f"workspace_root = {json.dumps(str(base), ensure_ascii=False)}\n"
             '[[source]]\nname = "core-kb"\nsurface = "core"\n'
-            '[[source]]\nname = "vert-kb"\nsurface = "vertical"\n'
+            '[[source]]\nname = "vert-kb"\nsurface = "vertical"\n',
+            encoding="utf-8",
         )
         return reg
 

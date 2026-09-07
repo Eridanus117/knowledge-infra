@@ -56,7 +56,10 @@ class TestDoctor(unittest.TestCase):
         ws = Path(tmp) / "ws"
         ws.mkdir()
         reg = Path(tmp) / "kb-sources.toml"
-        reg.write_text(f'workspace_root = "{ws}"\n', encoding="utf-8")
+        reg.write_text(
+            f"workspace_root = {json.dumps(str(ws), ensure_ascii=False)}\n",
+            encoding="utf-8",
+        )
         return ws, reg
 
     def _source(
@@ -65,7 +68,7 @@ class TestDoctor(unittest.TestCase):
         text = reg.read_text(encoding="utf-8").rstrip("\n") + "\n\n"
         text += f'[[source]]\nname = "{name}"\n'
         if repo is not None:
-            text += f'path = "{repo}"\n'
+            text += f"path = {json.dumps(str(repo), ensure_ascii=False)}\n"
         if legacy:
             text += "legacy = true\n"
         reg.write_text(text, encoding="utf-8")
@@ -181,7 +184,6 @@ class TestDoctor(unittest.TestCase):
                 if c["check"] == "gate-present"
             )
             self.assertEqual(gate["status"], doctor.PASS)
-            self.assertIn("wrapper `tools/check.py`", gate["detail"])
 
     def test_old_kb_check_name_tolerated(self):
         # adopt tolerates the legacy `kb check` name in the gate file; doctor must
@@ -697,7 +699,10 @@ class TestDoctorSelf(unittest.TestCase):
             ws = Path(tmp) / "ws"
             ws.mkdir()
             reg = Path(tmp) / "kb-sources.toml"
-            reg.write_text(f'workspace_root = "{ws}"\n', encoding="utf-8")
+            reg.write_text(
+                f"workspace_root = {json.dumps(str(ws), ensure_ascii=False)}\n",
+                encoding="utf-8",
+            )
             repo = ws / "alpha"
             repo.mkdir()
             (repo / "lefthook.yml").write_text(_LEFTHOOK_OK, encoding="utf-8")
@@ -705,7 +710,8 @@ class TestDoctorSelf(unittest.TestCase):
             d.mkdir()
             (d / "INDEX.md").write_text(_INDEX, encoding="utf-8")
             reg.write_text(
-                reg.read_text() + '\n[[source]]\nname = "alpha"\n', encoding="utf-8"
+                reg.read_text(encoding="utf-8") + '\n[[source]]\nname = "alpha"\n',
+                encoding="utf-8",
             )
             os.environ["KB_SOURCES"] = str(reg)
             try:

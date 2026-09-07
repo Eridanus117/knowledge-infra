@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -32,7 +33,7 @@ class TestConfig(unittest.TestCase):
             validator = base / "validator"
             cfg = base / "config.toml"
             cfg.write_text(
-                f'[mermaid]\nvalidator_dir = "{validator}"\n',
+                f"[mermaid]\nvalidator_dir = {json.dumps(str(validator), ensure_ascii=False)}\n",
                 encoding="utf-8",
             )
             with mock.patch.dict(os.environ, {"RHIZOME_CONFIG": str(cfg)}):
@@ -43,7 +44,7 @@ class TestConfig(unittest.TestCase):
             base = Path(tmp)
             cfg = base / "config.toml"
             cfg.write_text(
-                f'[mermaid]\nvalidator_dir = "{base / "from-config"}"\n',
+                f"[mermaid]\nvalidator_dir = {json.dumps(str(base / 'from-config'), ensure_ascii=False)}\n",
                 encoding="utf-8",
             )
             with mock.patch.dict(

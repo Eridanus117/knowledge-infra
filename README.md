@@ -118,7 +118,7 @@ code: [repo/path/to/file.py]
 校验文档中的 Mermaid 代码块。启用方式：
 
 ```sh
-npm install --prefix mermaid-validator
+npm ci --prefix mermaid-validator
 ```
 
 未安装时，包含 Mermaid 块的文档在提交时会报 ERROR（需 node 在 PATH 上）。
@@ -126,10 +126,22 @@ npm install --prefix mermaid-validator
 ## 开发检查
 
 ```sh
-uv run pytest
-uv run ruff check .
-uv run ruff format --check .
+npm ci --prefix mermaid-validator
+uv run pytest -ra
+uvx ruff@0.15.16 check .
+uvx ruff@0.15.16 format --check .
 ```
+
+完整测试需要 Python 3.12+、Git，以及满足 sidecar 锁文件版本要求的 Node.js/npm。
+Windows 使用 Git for Windows 提供的 `sh` 执行临时 Git hook；上述命令可直接在
+PowerShell 中运行。`npm ci` 只安装既有锁定的解析器依赖，不下载浏览器，
+不需要外部检索服务。未安装 sidecar 时，两个 Mermaid 解析用例会因缺少依赖跳过，
+不能将这样的结果称为完整 Windows 验收；安装后 Windows 仅跳过 POSIX 执行位检查。
+
+测试中的 TOML 路径按字符串序列化，生成文件显式按 UTF-8 读写；
+临时 hook 的 Python 路径及 `PYTHONPATH` 按 shell 参数引用。不要依赖
+`PYTHONUTF8`、手工替换路径分隔符或放宽冻结门禁来获得通过结果。
+冻结测试先确认准备提交成功，再通过真实 hook 校验批准修改、未批准拦截和内容错误拦截。
 
 ## 许可证
 
