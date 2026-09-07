@@ -18,7 +18,7 @@ def io_path(path: Path) -> Path:
     value = str(path)
     if value.startswith("\\\\?\\"):
         return path
-    value = os.path.abspath(value)
+    value = os.path.normpath(str(path.absolute()))
     if value.startswith("\\\\"):
         return Path("\\\\?\\UNC\\" + value[2:])
     return Path("\\\\?\\" + value)
