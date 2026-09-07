@@ -234,7 +234,7 @@ def test_status_payload_is_written_only_when_explicit(
     _note(
         tmp_path / "d" / "unclassified.md",
         '---\ndescription: "待分类"\nkeywords: [unclassified]\n'
-        'kind: note\nstatus: unclassified\n---\n\n# T\n\n正文。\n',
+        "kind: note\nstatus: unclassified\n---\n\n# T\n\n正文。\n",
     )
     fake = FakeQdrant()
     _, rep = sync_repo(

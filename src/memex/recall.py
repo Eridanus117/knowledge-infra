@@ -49,7 +49,7 @@ class RecallHit:
     legacy: bool = False
     raw: bool = False
     unverified: bool = False
-    # frontmatter 明确声明的生命周期/分类状态；空值表示旧文档未声明。
+    # frontmatter 明确声明的生命周期/分类状态。空值表示旧文档未声明。
     status: str = ""
 
 

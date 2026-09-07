@@ -29,7 +29,7 @@ class Doc:
     kind_explicit: bool = True
     source_hash: str | None = None
     compiled_hash: str | None = None
-    # compiled kb-note-v1 可选；老产物和 legacy artifact 为空。
+    # compiled kb-note-v1 可选。老产物和 legacy artifact 为空。
     status: str = ""
 
 
