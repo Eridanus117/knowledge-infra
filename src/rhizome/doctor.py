@@ -33,21 +33,24 @@ indexed. The three items —
   1. gate present      — lefthook.yml has `rhizome check`, or .pre-commit-config.yaml
                           wires an equivalent gate (mirrors adopt._lefthook_state;
                           tolerant of the old `kb check` name, like adopt).
+                          未命中旧配置时, 后备检查 Git 生效 pre-commit 的直接命令。
   2. gate resolvable    — which("rhizome"): the command the gate invokes must exist
                           in the hook's fresh shell, else the gate dies exit 127.
   3. INDEX present       — discover_domains() finds at least one docs/INDEX.md domain
                           (reuses the registry's own domain discovery).
 
-are all stat + one which, so the whole fleet scan is sub-second with zero
-external dependencies. Content-index coverage (compile produced >0 / silent
-skip) is NOT here — that is the compile step's own loud-report.
+配置探测保持既有语义; Git 后备只读查询路径和 hook 文本, 不执行 hook。
+静态识别不证明任意 shell 的可达性, 也不审计所有框架的安装状态。
+内容索引覆盖仍由 compile 自行报告, 不在此处判断。
 """
 
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import shutil
+import subprocess
 from pathlib import Path
 
 from . import adopt, contract, sources
@@ -84,8 +87,6 @@ def _wrapper_rhizome_check(repo_root: Path, config_text: str) -> str | None:
     non-commented Lefthook ``run:`` line are inspected.
     """
     for line in config_text.splitlines():
-        if line.lstrip().startswith("#"):
-            continue
         match = _RUN_COMMAND_LINE_RE.match(line)
         if not match:
             continue
@@ -110,15 +111,71 @@ def _wrapper_rhizome_check(repo_root: Path, config_text: str) -> str | None:
     return None
 
 
-def _gate_present(repo_root: Path) -> tuple[bool, str]:
-    """Item 1: does the repo carry a KB commit gate at all?
+def _direct_rhizome_check(text: str) -> bool:
+    """只识别行首直接命令, 不追踪 wrapper 或解析任意 shell 控制流。"""
+    found = False
+    for line in text.splitlines():
+        lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|<>")
+        lexer.whitespace_split = True
+        try:
+            tokens = list(lexer)
+        except ValueError:
+            return False
+        # heredoc 和跨行引号可能把后续文本伪装成命令, 整个 hook 保守拒绝。
+        if any(token.startswith("<<") for token in tokens):
+            return False
+        if tokens[:1] == ["exec"]:
+            tokens = tokens[1:]
+        if tokens[:2] == ["rhizome", "check"]:
+            found = True
+    return found
 
-    A gate counts if lefthook.yml names `rhizome check` (or the tolerated old
-    `kb check`, matching adopt._lefthook_state), if a named Python/TypeScript
-    wrapper invokes `rhizome check`, or if .pre-commit-config.yaml wires the
-    same. Comment lines never count (a commented-out gate is no gate — same
-    rule adopt enforces). Returns (ok, detail) where detail names the file
-    that satisfied the gate, or every place we looked when it did not.
+
+def _git_hook_gate(repo_root: Path) -> tuple[bool, str]:
+    """让 Git 解析唯一生效路径, 不猜 .git 目录或 core.hooksPath 基准。"""
+    try:
+        proc = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-path",
+                "hooks/pre-commit",
+            ],
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False, "Git pre-commit path unavailable"
+    # Git 路径输出为 UTF-8, 不依赖 Windows 进程的默认 locale。
+    paths = proc.stdout.decode("utf-8", errors="replace").splitlines()
+    if proc.returncode != 0 or len(paths) != 1 or not Path(paths[0]).is_absolute():
+        return (
+            False,
+            "Git pre-commit path unavailable (query failed or no absolute path)",
+        )
+    hook = Path(paths[0])
+    try:
+        if not hook.is_file() or not os.access(hook, os.X_OK):
+            return False, f"Git pre-commit `{hook}` (absent or not executable)"
+        text = hook.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False, f"Git pre-commit `{hook}` (unreadable)"
+    if _direct_rhizome_check(text):
+        return True, f"Git pre-commit `{hook}` runs `rhizome check`"
+    return (
+        False,
+        f"Git pre-commit `{hook}` (no supported direct `rhizome check` command)",
+    )
+
+
+def _gate_present(repo_root: Path) -> tuple[bool, str]:
+    """先保留旧配置和 wrapper 语义, 未命中才检查 Git 生效 hook。
+
+    返回 (ok, detail), 成功时说明证据路径, 失败时列出检查过的位置。
+    此项不升级为所有框架的安装或执行状态审计。
     """
     checked: list[str] = []
     for fname in ("lefthook.yml", ".pre-commit-config.yaml"):
@@ -137,6 +194,10 @@ def _gate_present(repo_root: Path) -> tuple[bool, str]:
         if wrapper:
             return True, f"{fname} wrapper `{wrapper}` runs `rhizome check`"
         checked.append(f"{fname} (no `rhizome check` command or wrapper)")
+    git_ok, git_detail = _git_hook_gate(repo_root)
+    if git_ok:
+        return True, git_detail
+    checked.append(git_detail)
     return False, "no KB commit gate found: " + "; ".join(checked)
 
 

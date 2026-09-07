@@ -1,9 +1,8 @@
 """rhizome doctor --sources: fleet pipeline-integrity check.
 
-Mirrors test_adopt.py: fake which(), tmp registry + repo fixtures, no shelling
-out. Covers the three pipeline-integrity items (gate present, gate resolvable,
-INDEX present), the all-green path, each failure mode (with its diagnostic
-reason), fleet-wide non-zero exit, JSON shape, and the CLI wiring.
+沿用 test_adopt.py 的临时 registry 和目录 fixture.
+原有检查使用模拟 which, 新 Git hook 回归只运行 Git 元数据命令,
+不执行任何 hook 或脚本. 覆盖 gate, INDEX, fleet 结果及 CLI.
 """
 
 from __future__ import annotations
@@ -12,9 +11,12 @@ import contextlib
 import io
 import json
 import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from rhizome import doctor
 from rhizome.cli import main
@@ -378,6 +380,171 @@ class TestDoctor(unittest.TestCase):
                 rc = main(["doctor", "--sources"])
             self.assertEqual(rc, 2)
             self.assertIn("missing file", err.getvalue())
+
+
+class TestDoctorGitHook(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
+        env.update(
+            GIT_CONFIG_GLOBAL=os.devnull,
+            GIT_CONFIG_NOSYSTEM="1",
+        )
+        self.enterContext(patch.dict(os.environ, env, clear=True))
+        self.git = shutil.which("git")
+
+    def _git(self, repo: Path, *args: str) -> None:
+        if self.git is None:
+            self.skipTest("需要 Git")
+        subprocess.run(
+            [self.git, "-C", str(repo), *args],
+            check=True,
+            capture_output=True,
+            timeout=20,
+        )
+
+    def _repo(self) -> Path:
+        repo = self.tmp / "仓库 空格 & 路径"
+        repo.mkdir()
+        self._git(repo, "init", "--quiet", "--template=")
+        return repo
+
+    def _worktree(self, repo: Path) -> Path:
+        # 必须在创建任何 hook 前提交, fixture 绝不执行 hook.
+        self._git(
+            repo,
+            "-c",
+            "user.name=Doctor Fixture",
+            "-c",
+            "user.email=doctor@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "fixture",
+        )
+        worktree = self.tmp / "关联 工作树"
+        self._git(repo, "worktree", "add", "--quiet", "--detach", str(worktree))
+        return worktree
+
+    def _hook(self, directory: Path, body: str = "rhizome check\n") -> Path:
+        directory.mkdir(parents=True, exist_ok=True)
+        hook = directory / "pre-commit"
+        hook.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+        hook.chmod(0o755)
+        return hook
+
+    def test_nested_source_uses_relative_hooks_path(self):
+        repo = self._repo()
+        source = repo / "资料 空格" / "知识库"
+        docs = source / "docs"
+        docs.mkdir(parents=True)
+        (docs / "INDEX.md").write_text(_INDEX, encoding="utf-8")
+        self._git(repo, "config", "core.hooksPath", ".团队 hooks")
+        self._hook(repo / ".团队 hooks")
+
+        report = doctor.check_source(
+            "nested", source, gate_resolvable=(True, "fixture")
+        )
+
+        self.assertTrue(report["ok"])
+        gate = next(c for c in report["checks"] if c["check"] == "gate-present")
+        self.assertEqual(gate["status"], doctor.PASS)
+
+    def test_linked_worktree_uses_shared_default_hooks(self):
+        repo = self._repo()
+        worktree = self._worktree(repo)
+        self._hook(repo / ".git" / "hooks")
+
+        self.assertTrue(doctor._gate_present(worktree)[0])
+
+    def test_linked_worktree_resolves_relative_and_absolute_hooks_paths(self):
+        repo = self._repo()
+        worktree = self._worktree(repo)
+        relative = ".团队 hooks"
+        self._git(repo, "config", "core.hooksPath", relative)
+        self._hook(repo / relative)
+        self.assertFalse(doctor._gate_present(worktree)[0])
+
+        self._hook(worktree / relative)
+        self.assertTrue(doctor._gate_present(worktree)[0])
+
+        self._hook(worktree / relative, "echo 'rhizome check'\n")
+        absolute = self.tmp / "外部 共享 hooks"
+        self._git(repo, "config", "core.hooksPath", absolute.as_posix())
+        self.assertFalse(doctor._gate_present(worktree)[0])
+
+        self._hook(absolute)
+        self.assertTrue(doctor._gate_present(worktree)[0])
+
+    def test_only_effective_hook_counts(self):
+        repo = self._repo()
+        self._hook(repo / ".githooks")
+        self.assertFalse(doctor._gate_present(repo)[0])
+
+        self._hook(repo / ".git" / "hooks")
+        self.assertTrue(doctor._gate_present(repo)[0])
+
+        self._git(repo, "config", "core.hooksPath", ".其他 hooks")
+        self.assertFalse(doctor._gate_present(repo)[0])
+
+    def test_native_hook_requires_direct_shell_command(self):
+        repo = self._repo()
+        scripts = repo / "scripts"
+        scripts.mkdir()
+        (scripts / "check.sh").write_text("rhizome check\n", encoding="utf-8")
+        bodies = {
+            "comment": "# rhizome check\n",
+            "echo": "echo 'rhizome check'\n",
+            "checkout": "rhizome checkout\n",
+            "wrapper": "sh scripts/check.sh\n",
+            "heredoc": "rhizome check\ncat <<'EOF'\nrhizome check\nEOF\n",
+            "multiline_quote": 'rhizome check\nmessage="notes\nrhizome check\n"\n',
+        }
+        for label, body in bodies.items():
+            with self.subTest(label=label):
+                self._hook(repo / ".git" / "hooks", body)
+                self.assertFalse(doctor._gate_present(repo)[0])
+
+    def test_native_hook_accepts_exec_and_quoted_arguments(self):
+        repo = self._repo()
+        self._hook(
+            repo / ".git" / "hooks",
+            'exec "rhizome" \'check\' "资料/a # b.md" "$@" || exit 1 # 校验\n',
+        )
+
+        self.assertTrue(doctor._gate_present(repo)[0])
+
+    @unittest.skipUnless(os.name == "posix", "仅 POSIX 检查 hook 执行权限")
+    def test_nonexecutable_native_hook_is_ignored(self):
+        repo = self._repo()
+        hook = self._hook(repo / ".git" / "hooks")
+        hook.chmod(0o644)
+        self.assertFalse(doctor._gate_present(repo)[0])
+
+        hook.chmod(0o755)
+        self.assertTrue(doctor._gate_present(repo)[0])
+
+    def test_git_errors_preserve_existing_configuration(self):
+        repo = self.tmp / "非 Git 资料"
+        repo.mkdir()
+        config = repo / "lefthook.yml"
+        errors = (
+            FileNotFoundError("git"),
+            subprocess.TimeoutExpired("git", 5),
+            subprocess.CalledProcessError(128, "git"),
+        )
+        for error in errors:
+            with (
+                self.subTest(error=type(error).__name__),
+                patch("subprocess.run", side_effect=error),
+            ):
+                self.assertFalse(doctor._gate_present(repo)[0])
+                config.write_text(_LEFTHOOK_OK, encoding="utf-8")
+                self.assertTrue(doctor._gate_present(repo)[0])
+                config.unlink()
 
 
 from rhizome import adopt  # noqa: E402
