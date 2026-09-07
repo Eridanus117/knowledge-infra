@@ -13,7 +13,11 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-from memex.indexing.frontmatter import FrontmatterError, parse_frontmatter, split_frontmatter
+from memex.indexing.frontmatter import (
+    FrontmatterError,
+    parse_frontmatter,
+    split_frontmatter,
+)
 
 RAW_DIR = "000-raw"
 RAW_INDEX = "INDEX.md"
@@ -119,7 +123,9 @@ def apply_capture(plan: CapturePlan) -> None:
     if plan.index_created:
         plan.index_path.parent.mkdir(parents=True, exist_ok=True)
         if plan.index_path.exists():
-            raise LifecycleError(f"raw index appeared during capture: {plan.index_path}")
+            raise LifecycleError(
+                f"raw index appeared during capture: {plan.index_path}"
+            )
         plan.index_path.write_text(RAW_INDEX_CONTENT, encoding="utf-8")
     plan.path.write_text(plan.content, encoding="utf-8")
 
@@ -217,9 +223,13 @@ def plan_promotion(
         verified = (last_verified or "").strip()
         facts = [x.strip() for x in (evidence or []) if x.strip()]
         if not _valid_date(verified):
-            raise LifecycleError("canonical promotion requires last_verified=YYYY-MM-DD")
+            raise LifecycleError(
+                "canonical promotion requires last_verified=YYYY-MM-DD"
+            )
         if not facts:
-            raise LifecycleError("canonical promotion requires at least one evidence item")
+            raise LifecycleError(
+                "canonical promotion requires at least one evidence item"
+            )
         updates["last_verified"] = verified
         updates["evidence"] = facts
     return PromotionPlan(

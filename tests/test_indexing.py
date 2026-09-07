@@ -98,7 +98,7 @@ def test_root_index_contributes_empty_segment(tmp_path: Path) -> None:
 
 
 def test_lowercase_navigation_does_not_create_domain(tmp_path: Path) -> None:
-    # 人工导航和域外草稿不应扩大索引范围, 真域内缺少头部的正文仍须告警。
+    # 人工导航和域外草稿不应扩大索引范围。真域内缺少头部的正文仍须告警。
     _note(tmp_path / "index.md", "# 人工导航\n")
     _note(tmp_path / "inbox" / "raw.md", "# 域外草稿\n")
     _index(tmp_path / "notes" / "INDEX.md")
@@ -112,7 +112,9 @@ def test_lowercase_navigation_does_not_create_domain(tmp_path: Path) -> None:
         "knowledge:notes:INDEX",
         "knowledge:notes:indexed",
     }
-    assert [entry.source_path for entry in result.report.skipped] == ["notes/missing.md"]
+    assert [entry.source_path for entry in result.report.skipped] == [
+        "notes/missing.md"
+    ]
 
 
 def test_nested_index_node_chain(tmp_path: Path) -> None:
@@ -596,7 +598,7 @@ def test_status_is_optional_and_projected(tmp_path: Path) -> None:
     _note(
         tmp_path / "d" / "unclassified.md",
         '---\ndescription: "待分类材料"\nkeywords: [unclassified]\n'
-        'kind: note\nstatus: unclassified\n---\n\n# T\n\n正文。\n',
+        "kind: note\nstatus: unclassified\n---\n\n# T\n\n正文。\n",
     )
     out = compile_repo("repo", tmp_path)
     doc = next(d for d in out.docs if d.source_path == "d/unclassified.md")

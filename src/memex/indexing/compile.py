@@ -16,8 +16,8 @@ import json
 import re
 import subprocess
 from dataclasses import asdict, dataclass
-from urllib.parse import quote
 from pathlib import Path
+from urllib.parse import quote
 
 from memex.indexing.frontmatter import (
     FrontmatterError,
@@ -57,7 +57,7 @@ class CompiledDoc:
     compiled_hash: str
     commit_time: str | None
     schema: str = SCHEMA
-    # 只投影 frontmatter 明确声明的状态；空值不推断为 canonical。
+    # 只投影 frontmatter 明确声明的状态。空值不推断为 canonical。
     status: str = ""
 
 

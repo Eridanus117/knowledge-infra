@@ -133,7 +133,9 @@ def capture_cmd(
         "--repo",
         help="目标源仓, name=path(例如 source-alpha=/path/to/kb)",
     ),
-    apply: bool = typer.Option(False, "--apply", help="写入 raw note 与 000-raw/INDEX.md"),
+    apply: bool = typer.Option(
+        False, "--apply", help="写入 raw note 与 000-raw/INDEX.md"
+    ),
 ) -> None:
     """低摩擦捕获一篇 raw note;默认 dry-run。"""
     from memex.indexing.lifecycle import LifecycleError, apply_capture, plan_capture
@@ -158,7 +160,9 @@ def capture_cmd(
 
 @app.command(name="promote")
 def promote_cmd(
-    path: str = typer.Option(..., "--path", help="源仓相对路径,例如 000-raw/2026/08/25/a.md"),
+    path: str = typer.Option(
+        ..., "--path", help="源仓相对路径,例如 000-raw/2026/08/25/a.md"
+    ),
     target: str = typer.Option(
         ...,
         "--to",
