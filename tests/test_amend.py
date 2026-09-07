@@ -14,6 +14,7 @@ not whatever `rhizome` happens to be installed on PATH.
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -77,7 +78,7 @@ class _GateRepoCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name).resolve()
-        _git(self.root, "init", "-q")
+        _git(self.root, "init", "-q").check_returncode()
 
         dom = self.root / "decisions"
         dom.mkdir()
@@ -93,8 +94,8 @@ class _GateRepoCase(unittest.TestCase):
         )
         self.living = dom / "living-ref.md"
         self.living.write_text(LIVING_REF, encoding="utf-8")
-        _git(self.root, "add", "-A")
-        _git(self.root, "commit", "-q", "-m", "seed")
+        _git(self.root, "add", "-A").check_returncode()
+        _git(self.root, "commit", "-q", "-m", "seed").check_returncode()
 
         # A real pre-commit gate: run the code-under-test's check on staged .md.
         hook = self.root / ".git" / "hooks" / "pre-commit"
@@ -103,7 +104,7 @@ class _GateRepoCase(unittest.TestCase):
             #!/bin/sh
             files=$(git diff --cached --name-only --diff-filter=ACMR -- '*.md')
             [ -z "$files" ] && exit 0
-            PYTHONPATH={_SRC} {sys.executable} -m rhizome.cli check $files
+            PYTHONPATH={shlex.quote(_SRC)} {shlex.quote(sys.executable)} -m rhizome.cli check $files
         """),
             encoding="utf-8",
         )
@@ -139,7 +140,6 @@ class TestAmendHappyPath(_GateRepoCase):
         result = self._run_amend(self.adr, "fix typo in decided clause")
 
         # committed
-        self.assertNotEqual(result["commit"], "?")
         log = _git(self.root, "log", "-1", "--format=%B").stdout
         self.assertIn("Frozen-Amend-Approved: fix typo in decided clause", log)
         self.assertIn("amend(frozen): decisions/adr-001-x.md", log)
@@ -170,11 +170,13 @@ class TestAmendHappyPath(_GateRepoCase):
     def test_amend_works_on_status_frozen_ref(self):
         ref = self.root / "decisions" / "frozen-ref.md"
         ref.write_text(FROZEN_REF, encoding="utf-8")
-        _git(self.root, "add", "-A")
-        _git(self.root, "commit", "-q", "-m", "add frozen ref")
+        _git(self.root, "add", "-A").check_returncode()
+        _git(self.root, "commit", "-q", "-m", "add frozen ref").check_returncode()
         ref.write_text(FROZEN_REF + "\nmore\n", encoding="utf-8")
-        result = self._run_amend(ref, "correct broken link")
-        self.assertNotEqual(result["commit"], "?")
+        self._run_amend(ref, "correct broken link")
+        head = _git(self.root, "show", "HEAD:decisions/frozen-ref.md")
+        head.check_returncode()
+        self.assertEqual(head.stdout, FROZEN_REF + "\nmore\n")
 
 
 class TestAmendRejections(_GateRepoCase):
@@ -205,18 +207,17 @@ class TestAmendRejections(_GateRepoCase):
         self.adr.write_text(broken, encoding="utf-8")
         with self.assertRaises(amend.AmendError) as ctx:
             self._run_amend(self.adr, "amend but with bad frontmatter")
-        # the failure is the content gate, not the frozen gate
-        self.assertIn("refused", str(ctx.exception).lower())
-        # nothing got committed: HEAD still has the original frozen ADR
+        # 必须命中缺失字段的内容门禁; 冻结批准不能绕过 frontmatter 校验。
+        self.assertIn("description", str(ctx.exception))
         head = _git(self.root, "show", "HEAD:decisions/adr-001-x.md").stdout
-        self.assertNotIn("broke frontmatter", head)
+        self.assertEqual(head, FROZEN_ADR)
 
 
 class TestUnapprovedStillBlocked(_GateRepoCase):
     def test_unapproved_frozen_edit_still_blocks_at_gate(self):
         # Edit + stage + plain `git commit` (no amend, no env) must be rejected.
         self.adr.write_text(FROZEN_ADR + "\nsneaky edit\n", encoding="utf-8")
-        _git(self.root, "add", "decisions/adr-001-x.md")
+        _git(self.root, "add", "decisions/adr-001-x.md").check_returncode()
         proc = _git(self.root, "commit", "-m", "sneaky")
         self.assertNotEqual(
             proc.returncode, 0, "frozen edit must be blocked without approval"
@@ -235,7 +236,7 @@ class TestApprovalIsNarrow(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name).resolve()
-        _git(self.root, "init", "-q")
+        _git(self.root, "init", "-q").check_returncode()
         dom = self.root / "decisions"
         dom.mkdir()
         (dom / "INDEX.md").write_text(
@@ -248,8 +249,8 @@ class TestApprovalIsNarrow(unittest.TestCase):
         self.b.write_text(
             FROZEN_ADR.replace("decided", "other decision"), encoding="utf-8"
         )
-        _git(self.root, "add", "-A")
-        _git(self.root, "commit", "-q", "-m", "seed")
+        _git(self.root, "add", "-A").check_returncode()
+        _git(self.root, "commit", "-q", "-m", "seed").check_returncode()
         self.a.write_text(FROZEN_ADR + "\nedit a\n", encoding="utf-8")
         self.b.write_text(
             FROZEN_ADR.replace("decided", "other decision") + "\nedit b\n",

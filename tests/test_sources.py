@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,7 +20,8 @@ def _domain(repo: Path, rel: str, desc: str = "d", notes: list[str] | None = Non
     d = repo / rel
     d.mkdir(parents=True, exist_ok=True)
     (d / "INDEX.md").write_text(
-        f"---\ndescription: {desc}\nkeywords: [x]\nkind: index\n---\n# {rel}\n"
+        f"---\ndescription: {desc}\nkeywords: [x]\nkind: index\n---\n# {rel}\n",
+        encoding="utf-8",
     )
     for nm in notes or []:
         (d / nm).write_text("---\ndescription: n\nkeywords: [x]\n---\n# n\n")
@@ -45,11 +47,11 @@ def _pt(identity: str, source_path: str | None):
 
 
 def _registry(base: Path, names: list[str]) -> Path:
-    lines = [f'workspace_root = "{base}"', ""]
+    lines = [f"workspace_root = {json.dumps(str(base), ensure_ascii=False)}", ""]
     for nm in names:
         lines += ["[[source]]", f'name = "{nm}"', ""]
     reg = base / "kb-sources.toml"
-    reg.write_text("\n".join(lines))
+    reg.write_text("\n".join(lines), encoding="utf-8")
     return reg
 
 
@@ -75,10 +77,11 @@ class TestRegistry(unittest.TestCase):
             base = Path(tmp)
             reg = base / "kb-sources.toml"
             reg.write_text(
-                f'workspace_root = "{base}"\n'
+                f"workspace_root = {json.dumps(str(base), ensure_ascii=False)}\n"
                 '[[source]]\nname = "core-kb"\nsurface = "core"\n'
                 '[[source]]\nname = "legacy-kb"\nlegacy = true\n'
-                '[[source]]\nname = "vert-kb"\n'  # omitted flags → defaults
+                '[[source]]\nname = "vert-kb"\n',  # 未指定的标志沿用默认值。
+                encoding="utf-8",
             )
             entries = sources.load_source_entries(reg)
             self.assertEqual(
@@ -99,8 +102,9 @@ class TestRegistry(unittest.TestCase):
             base = Path(tmp)
             reg = base / "kb-sources.toml"
             reg.write_text(
-                f'workspace_root = "{base}"\n'
-                '[[source]]\nname = "kb"\nsurface = "bogus"\n'
+                f"workspace_root = {json.dumps(str(base), ensure_ascii=False)}\n"
+                '[[source]]\nname = "kb"\nsurface = "bogus"\n',
+                encoding="utf-8",
             )
             with self.assertRaises(sources.SourcesError):
                 sources.load_source_entries(reg)

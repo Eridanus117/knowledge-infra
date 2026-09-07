@@ -13,7 +13,9 @@ rhizome KB content.
 
 from __future__ import annotations
 
+import json
 import os
+import shlex
 import subprocess
 import tempfile
 import textwrap
@@ -60,9 +62,11 @@ def _mkdomain(repo: Path, rel: str) -> Path:
 
 
 def _write_registry(tmp: Path, entries: list[tuple[str, Path]]) -> Path:
-    lines = [f'workspace_root = "{tmp}"\n']
+    lines = [f"workspace_root = {json.dumps(str(tmp), ensure_ascii=False)}\n"]
     for name, path in entries:
-        lines.append(f'\n[[source]]\nname = "{name}"\npath = "{path}"\n')
+        lines.append(
+            f'\n[[source]]\nname = "{name}"\npath = {json.dumps(str(path), ensure_ascii=False)}\n'
+        )
     reg = tmp / "kb-sources.toml"
     reg.write_text("".join(lines), encoding="utf-8")
     return reg
@@ -417,10 +421,10 @@ class TestRelocateThroughLiveGate(_RegistryCase):
         hook.write_text(
             textwrap.dedent(f"""\
             #!/bin/sh
-            PYTHONPATH={_SRC} {sys.executable} -m rhizome.cli check --staged-frozen || exit 1
+            PYTHONPATH={shlex.quote(_SRC)} {shlex.quote(sys.executable)} -m rhizome.cli check --staged-frozen || exit 1
             files=$(git diff --cached --name-only --diff-filter=ACMR -- '*.md')
             [ -z "$files" ] && exit 0
-            PYTHONPATH={_SRC} {sys.executable} -m rhizome.cli check $files
+            PYTHONPATH={shlex.quote(_SRC)} {shlex.quote(sys.executable)} -m rhizome.cli check $files
         """),
             encoding="utf-8",
         )
@@ -464,8 +468,8 @@ class TestBatchAtomicity(_RegistryCase):
         n2.write_text(NOTE, encoding="utf-8")
         plan_path = self.tmp / "batch.toml"
         plan_path.write_text(
-            f'[[move]]\nsource = "{n1}"\nto = "srcrepo:archive"\n'
-            f'[[move]]\nsource = "{n2}"\nto = "srcrepo:ghost-domain"\n',
+            f'[[move]]\nsource = {json.dumps(str(n1), ensure_ascii=False)}\nto = "srcrepo:archive"\n'
+            f'[[move]]\nsource = {json.dumps(str(n2), ensure_ascii=False)}\nto = "srcrepo:ghost-domain"\n',
             encoding="utf-8",
         )
         with self.assertRaises(relocate.RelocateError):

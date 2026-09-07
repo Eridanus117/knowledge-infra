@@ -71,7 +71,7 @@ class TestAdopt(unittest.TestCase):
         ws.mkdir()
         reg = Path(tmp) / "kb-sources.toml"
         reg.write_text(
-            f'workspace_root = "{ws}"\n\n[[source]]\nname = "seed"\n',
+            f'workspace_root = {json.dumps(str(ws), ensure_ascii=False)}\n\n[[source]]\nname = "seed"\n',
             encoding="utf-8",
         )
         return ws, reg
@@ -110,7 +110,7 @@ class TestAdopt(unittest.TestCase):
                 {s["step"]: s["status"] for s in res["steps"]},
                 {"registry": "changed", "index": "changed", "lefthook": "changed"},
             )
-            text = reg.read_text()
+            text = reg.read_text(encoding="utf-8")
             self.assertIn('name = "proj"', text)
             self.assertNotIn(
                 "path =", text.split('name = "proj"')[1]
@@ -119,14 +119,17 @@ class TestAdopt(unittest.TestCase):
             self.assertEqual([e["name"] for e in data["source"]], ["seed", "proj"])
             index = repo / "docs" / "INDEX.md"
             self.assertTrue(index.is_file())
-            self.assertIn('description: "proj docs domain"', index.read_text())
-            self.assertIn("kind: index", index.read_text())
             self.assertIn(
-                "rhizome check {staged_files}", (repo / "lefthook.yml").read_text()
+                'description: "proj docs domain"', index.read_text(encoding="utf-8")
+            )
+            self.assertIn("kind: index", index.read_text(encoding="utf-8"))
+            self.assertIn(
+                "rhizome check {staged_files}",
+                (repo / "lefthook.yml").read_text(encoding="utf-8"),
             )
             self.assertIn(
                 "--duplicate-domains --staged-frozen",
-                (repo / "lefthook.yml").read_text(),
+                (repo / "lefthook.yml").read_text(encoding="utf-8"),
             )
             self.assertEqual(
                 runner.install_calls, [(["lefthook", "install"], repo.resolve())]
@@ -137,10 +140,10 @@ class TestAdopt(unittest.TestCase):
             ws, reg = self._ws(tmp)
             self._repo(ws)
             self._adopt("proj", reg, description="d", keywords=["k"])
-            before = reg.read_text()
+            before = reg.read_text(encoding="utf-8")
             res, runner = self._adopt("proj", reg)
             self.assertEqual({s["status"] for s in res["steps"]}, {"ok"})
-            self.assertEqual(reg.read_text(), before)
+            self.assertEqual(reg.read_text(encoding="utf-8"), before)
             self.assertEqual(runner.install_calls, [])
 
     # ---- registry append edge cases ------------------------------------------
@@ -149,9 +152,11 @@ class TestAdopt(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             ws, reg = self._ws(tmp)
             self._repo(ws, domain="docs")
-            reg.write_text(reg.read_text().rstrip("\n"), encoding="utf-8")
+            reg.write_text(
+                reg.read_text(encoding="utf-8").rstrip("\n"), encoding="utf-8"
+            )
             self._adopt("proj", reg)
-            data = tomllib.loads(reg.read_text())
+            data = tomllib.loads(reg.read_text(encoding="utf-8"))
             self.assertIn("proj", [e["name"] for e in data["source"]])
 
     def test_repo_outside_workspace_root_gets_path_line(self):
@@ -159,7 +164,7 @@ class TestAdopt(unittest.TestCase):
             _, reg = self._ws(tmp)
             repo = self._repo(Path(tmp) / "elsewhere", "proj2", domain="docs")
             self._adopt(str(repo), reg)
-            data = tomllib.loads(reg.read_text())
+            data = tomllib.loads(reg.read_text(encoding="utf-8"))
             entry = next(e for e in data["source"] if e["name"] == "proj2")
             self.assertEqual(Path(entry["path"]).expanduser().resolve(), repo.resolve())
 
@@ -169,10 +174,11 @@ class TestAdopt(unittest.TestCase):
             ws, reg = self._ws(tmp)
             repo = self._repo(ws, domain="docs")
             reg.write_text(
-                f'workspace_root = "{Path(tmp) / "nowhere"}"\n\n[[source]]\nname = "proj"\npath = "{repo}"\n',
+                f"workspace_root = {json.dumps(str(Path(tmp) / 'nowhere'), ensure_ascii=False)}\n\n"
+                f'[[source]]\nname = "proj"\npath = {json.dumps(str(repo), ensure_ascii=False)}\n',
                 encoding="utf-8",
             )
-            before = reg.read_text()
+            before = reg.read_text(encoding="utf-8")
             res, _ = self._adopt(str(repo.resolve()), reg)
             self.assertEqual(
                 res["steps"][0],
@@ -182,14 +188,15 @@ class TestAdopt(unittest.TestCase):
                     "detail": f"already listed in {reg.name}",
                 },
             )
-            self.assertEqual(reg.read_text(), before)
+            self.assertEqual(reg.read_text(encoding="utf-8"), before)
 
     def test_same_name_different_path_conflicts(self):
         with tempfile.TemporaryDirectory() as tmp:
             ws, reg = self._ws(tmp)
             self._repo(ws, domain="docs")
             reg.write_text(
-                f'workspace_root = "{ws}"\n\n[[source]]\nname = "proj"\npath = "/somewhere/else"\n',
+                f"workspace_root = {json.dumps(str(ws), ensure_ascii=False)}\n\n"
+                '[[source]]\nname = "proj"\npath = "/somewhere/else"\n',
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(AdoptError, "different path"):
@@ -200,7 +207,8 @@ class TestAdopt(unittest.TestCase):
             ws, reg = self._ws(tmp)
             repo = self._repo(ws, domain="docs")
             reg.write_text(
-                f'workspace_root = "{ws}"\n\n[[source]]\nname = "alias"\npath = "{repo}"\n',
+                f"workspace_root = {json.dumps(str(ws), ensure_ascii=False)}\n\n"
+                f'[[source]]\nname = "alias"\npath = {json.dumps(str(repo), ensure_ascii=False)}\n',
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(
@@ -225,10 +233,12 @@ class TestAdopt(unittest.TestCase):
             repo = self._repo(ws)
             (repo / "docs").mkdir()
             (repo / "docs" / "index.md").write_text("# lowercase\n")
-            before = reg.read_text()
+            before = reg.read_text(encoding="utf-8")
             with self.assertRaisesRegex(AdoptError, "case variant"):
                 self._adopt("proj", reg, description="d", keywords=["k"])
-            self.assertEqual(reg.read_text(), before)  # registry untouched
+            self.assertEqual(
+                reg.read_text(encoding="utf-8"), before
+            )  # registry untouched
             self.assertFalse((repo / "lefthook.yml").exists())
 
     def test_no_domain_without_dk_is_usage_error(self):
@@ -264,7 +274,7 @@ class TestAdopt(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             ws, reg = self._ws(tmp)
             repo = self._repo(ws, domain="docs")
-            before = reg.read_text()
+            before = reg.read_text(encoding="utf-8")
             with self.assertRaisesRegex(AdoptUsageError, "not on PATH"):
                 run_adopt(
                     "proj",
@@ -274,7 +284,7 @@ class TestAdopt(unittest.TestCase):
                     cwd=Path("/"),
                 )
             self.assertEqual(
-                reg.read_text(), before
+                reg.read_text(encoding="utf-8"), before
             )  # probe-before-write: nothing written
             self.assertFalse((repo / "lefthook.yml").exists())
 
@@ -298,7 +308,9 @@ class TestAdopt(unittest.TestCase):
             custom = "pre-commit:\n  commands:\n    mine:\n      run: echo hi\n"
             (repo / "lefthook.yml").write_text(custom)
             res, runner = self._adopt("proj", reg)
-            self.assertEqual((repo / "lefthook.yml").read_text(), custom)
+            self.assertEqual(
+                (repo / "lefthook.yml").read_text(encoding="utf-8"), custom
+            )
             self.assertTrue(any("no `rhizome check`" in w for w in res["warnings"]))
             self.assertEqual(len(runner.install_calls), 1)  # still converges the hook
 
@@ -395,19 +407,19 @@ class TestAdopt(unittest.TestCase):
             hooks.mkdir(parents=True, exist_ok=True)
             (hooks / "pre-commit").write_text("# managed by lefthook\n")
             reg.write_text(
-                f'workspace_root = "{ws}"\n\n[[source]]\nname = "proj"\n',
+                f'workspace_root = {json.dumps(str(ws), ensure_ascii=False)}\n\n[[source]]\nname = "proj"\n',
                 encoding="utf-8",
             )
             os.environ["KB_SOURCES"] = str(reg)
-            # main() probes the real PATH for `lefthook` and the gate command;
-            # stub both so the test is hermetic (CI has neither installed). The
-            # repo is already fully adopted, so they are only `which`-probed,
-            # never executed.
+            # 只探测 PATH, 不执行工具; Windows 使用 PATHEXT 可识别的原生脚本。
             stub_bin = Path(tmp) / "stub-bin"
             stub_bin.mkdir()
             for _tool in ("lefthook", "rhizome"):
-                _exe = stub_bin / _tool
-                _exe.write_text("#!/bin/sh\nexit 0\n")
+                _exe = stub_bin / (_tool + ".cmd" if os.name == "nt" else _tool)
+                _exe.write_text(
+                    "@exit /b 0\n" if os.name == "nt" else "#!/bin/sh\nexit 0\n",
+                    encoding="utf-8",
+                )
                 _exe.chmod(0o755)
             _saved_path = os.environ["PATH"]
             os.environ["PATH"] = f"{stub_bin}{os.pathsep}{_saved_path}"
