@@ -87,8 +87,6 @@ def _wrapper_rhizome_check(repo_root: Path, config_text: str) -> str | None:
     non-commented Lefthook ``run:`` line are inspected.
     """
     for line in config_text.splitlines():
-        if line.lstrip().startswith("#"):
-            continue
         match = _RUN_COMMAND_LINE_RE.match(line)
         if not match:
             continue
