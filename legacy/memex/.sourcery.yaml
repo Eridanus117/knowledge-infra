@@ -1,0 +1,27 @@
+ignore:
+  - .git
+  - .venv
+  - dist
+  - build
+  - "*.egg-info"
+  - uv.lock
+
+rule_settings:
+  enable:
+    - default
+  disable: []
+  rule_types:
+    - refactoring
+    - suggestion
+  python_version: "3.12"
+
+rules: []
+
+metrics:
+  quality_threshold: 25.0
+
+github:
+  ignore_labels:
+    - sourcery-ignore
+    - no-ai-review
+  request_review: author

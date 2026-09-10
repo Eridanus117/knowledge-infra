@@ -1,0 +1,526 @@
+"""memex-sync CLI —— 写路径入口。
+
+  memex-sync compile  --repo <name>=<path> [...] [--out DIR] [--dry-run]
+  memex-sync sync     --repo <name>=<path> [...] [--apply] [--force]
+  memex-sync sync-all [--apply] [--force]
+
+sync 内部先 compile;默认 dry-run(零写入), --apply 才动 qdrant + 落盘 compiled。
+sync-all = orchestrator: 遍历 registry(真相收敛到 kb-sources.toml)串行各仓,
+单仓失败记录继续。退出码: 0 = 全绿;1 = 任一仓硬失败;2 = 无硬失败但有
+prune 守卫拒绝(需人工确认后 --force);3 = 无 1/2 但有内容完整性发现
+(0-doc 仓 / 域内静默 skip,供日审 cadence 检测告警)。
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import typer
+
+from memex.config import settings
+from memex.indexing.integrity import IntegrityReport
+from memex.indexing.pipeline import (
+    PruneResult,
+    RetiredRepoPrune,
+    compile_repo,
+    persist,
+    prune_retired_repos,
+    prune_stale_compiled,
+)
+from memex.registry import load_source_registry
+
+app = typer.Typer(
+    no_args_is_help=True, add_completion=False, help="memex-sync 写路径编译"
+)
+
+# M-3: 退出码语义(主线已拍)。
+EXIT_FAILURE = 1  # 硬失败(单仓 error / 单篇失败 / 崩溃)
+EXIT_NEEDS_FORCE = 2  # 无硬失败, 但 prune 守卫拒绝 → 需人工介入(--force)
+# 无硬失败、无 prune 拒绝, 但有内容完整性发现(0-doc 仓 / 域内静默 skip)→ distinct
+# 退出码, 供日审 cadence 检测告警。优先级低于 NEEDS_FORCE/FAILURE(那两个要人立刻
+# 处置), 这个是可被自动检测的告警信号。
+EXIT_INTEGRITY = 3
+
+
+@app.callback()
+def _root() -> None:
+    """保留子命令名空间(typer 单命令会塌缩, 加 callback 防止)。"""
+
+
+def _resolve_repos(
+    repo_args: list[str] | None,
+) -> tuple[dict[str, Path], frozenset[str], str | None]:
+    """--repo name=path ... → ({name: path}, legacy_names, 降级警示)。
+
+    无 --repo 时取 registry 收敛真相;降级(toml 不可用)→ 返回 WARN 文案,
+    调用方 echo 进运行输出(M-2: 降级不能只埋日志)。
+    """
+    if not repo_args:
+        reg = load_source_registry()
+        warn = (
+            f"WARN: 源仓清单降级到内置默认(kb-sources.toml 不可用: {reg.reason})"
+            if reg.degraded
+            else None
+        )
+        return reg.repos, reg.legacy, warn
+    out: dict[str, Path] = {}
+    for raw in repo_args:
+        if "=" not in raw:
+            raise typer.BadParameter(f"--repo 需 name=path 形式, 收到: {raw!r}")
+        name, _, path = raw.partition("=")
+        name, path = name.strip(), path.strip()
+        if not name or not path:
+            raise typer.BadParameter(f"--repo name/path 不可为空: {raw!r}")
+        out[name] = Path(path).expanduser()
+    return out, frozenset(), None
+
+
+def _echo_prune(pr: PruneResult, repo: str, out_dir: Path) -> bool:
+    """echo compiled stale 清理结果, 返回是否守卫拒绝。"""
+    if pr.refused:
+        typer.echo(f"  compiled-prune REFUSED: {pr.refused}")
+        return True
+    if pr.stale:
+        verb = "deleted" if pr.deleted else "would delete"
+        typer.echo(
+            f"  compiled-prune {verb} {len(pr.stale)} stale doc(s) ← {out_dir / repo}"
+        )
+        for name in pr.stale:
+            typer.echo(f"    - {name}")
+    return False
+
+
+def _echo_retired(rp: RetiredRepoPrune, out_dir: Path) -> bool:
+    """echo 整仓退役清理结果, 返回是否守卫拒绝。"""
+    if rp.refused:
+        typer.echo(f"retired-repo-prune REFUSED: {rp.refused}")
+        return True
+    if rp.retired:
+        verb = "deleted" if rp.deleted else "would delete"
+        typer.echo(
+            f"retired-repo-prune {verb} {len(rp.retired)} 退役仓目录 ← {out_dir}"
+        )
+        for name in rp.retired:
+            typer.echo(f"  - {name}/")
+    return False
+
+
+def _echo_integrity(integ: IntegrityReport) -> None:
+    """显眼打印跨仓完整性 section(无发现则静默)。"""
+    section = integ.render()
+    if section:
+        typer.echo("")
+        typer.echo(section)
+
+
+def _echo_sync_progress(message: str) -> None:
+    """sync_repo 长阶段进度:必须在最终 report 前可见,避免 apply 看起来假死。"""
+    typer.echo(f"  {message}")
+
+
+@app.command(name="capture")
+def capture_cmd(
+    title: str = typer.Option(..., "--title", help="raw note 标题"),
+    text: str = typer.Option(
+        None,
+        "--text",
+        help="正文;省略时从 stdin 读取",
+    ),
+    source: str = typer.Option("manual", "--source", help="捕获来源标签"),
+    repo: str = typer.Option(
+        ...,
+        "--repo",
+        help="目标源仓, name=path(例如 source-alpha=/path/to/kb)",
+    ),
+    apply: bool = typer.Option(
+        False, "--apply", help="写入 raw note 与 000-raw/INDEX.md"
+    ),
+) -> None:
+    """低摩擦捕获一篇 raw note;默认 dry-run。"""
+    from memex.indexing.lifecycle import LifecycleError, apply_capture, plan_capture
+
+    repos, _legacy, _warn = _resolve_repos([repo])
+    name, repo_root = next(iter(repos.items()))
+    repo_root = repo_root.expanduser().resolve()
+    body = text if text is not None else sys.stdin.read()
+    try:
+        plan = plan_capture(repo_root, title=title, body=body, source=source)
+        if apply:
+            apply_capture(plan)
+    except LifecycleError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    verb = "captured" if apply else "would capture"
+    typer.echo(f"[{verb}] {name}:{plan.path.relative_to(repo_root)}")
+    if plan.index_created:
+        index_verb = "created" if apply else "would create"
+        typer.echo(f"  [{index_verb}] {plan.index_path.relative_to(repo_root)}")
+
+
+@app.command(name="promote")
+def promote_cmd(
+    path: str = typer.Option(
+        ..., "--path", help="源仓相对路径,例如 000-raw/2026/08/25/a.md"
+    ),
+    target: str = typer.Option(
+        ...,
+        "--to",
+        help="目标状态: raw | derived | canonical",
+    ),
+    repo: str = typer.Option(
+        ...,
+        "--repo",
+        help="目标源仓, name=path(例如 source-alpha=/path/to/kb)",
+    ),
+    last_verified: str = typer.Option(
+        None,
+        "--last-verified",
+        help="canonical 必填, YYYY-MM-DD",
+    ),
+    evidence: list[str] = typer.Option(
+        None,
+        "--evidence",
+        help="canonical 必填,可重复指定",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="写回源 Markdown"),
+) -> None:
+    """按相邻状态晋级 note;canonical 需要核验日期和 evidence。"""
+    from memex.indexing.lifecycle import (
+        LifecycleError,
+        apply_promotion,
+        plan_promotion,
+    )
+
+    repos, _legacy, _warn = _resolve_repos([repo])
+    _name, repo_root = next(iter(repos.items()))
+    repo_root = repo_root.expanduser().resolve()
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        note_path = candidate.resolve()
+    else:
+        note_path = (repo_root / candidate).resolve()
+    try:
+        note_path.relative_to(repo_root.resolve())
+        plan = plan_promotion(
+            note_path,
+            target_status=target,
+            last_verified=last_verified,
+            evidence=evidence,
+        )
+        if apply:
+            apply_promotion(plan)
+    except (LifecycleError, ValueError) as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    verb = "promoted" if apply else "would promote"
+    typer.echo(
+        f"[{verb}] {plan.path.relative_to(repo_root)}: "
+        f"{plan.source_status} -> {plan.target_status}"
+    )
+
+
+@app.command(name="compile")
+def compile_cmd(
+    repo: list[str] = typer.Option(
+        None, "--repo", help="name=path(可重复);省略则用默认源仓列表"
+    ),
+    out: Path = typer.Option(
+        None, "--out", help=f"compiled doc 落点(默认 {settings.compiled_dir})"
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="只打报告不落盘"),
+    force: bool = typer.Option(
+        False, "--force", help="放行 compiled stale mass-delete 守卫(待删 >50%)"
+    ),
+    legacy: bool = typer.Option(
+        False,
+        "--legacy",
+        help="把本次 --repo 输入按 legacy/raw/unverified source 编译",
+    ),
+) -> None:
+    """扫源仓 → 编译 kb-note-v1 → 落盘 + stale 清理 + 报告(--dry-run 只报告)。
+
+    退出码: 0 全绿 / 2 stale 清理守卫拒绝需人工 --force / 3 内容完整性发现
+    (0-doc 仓 / 域内静默 skip)。
+    """
+    repos, registry_legacy, degraded_warn = _resolve_repos(repo)
+    legacy_names = frozenset(repos) if legacy else registry_legacy
+    if degraded_warn:
+        typer.echo(degraded_warn)
+    out_dir = out.expanduser() if out is not None else settings.compiled_dir
+
+    total_indexed = 0
+    total_written = 0
+    any_needs_force = False
+    integ = IntegrityReport()
+    for name, path in repos.items():
+        result = compile_repo(name, path, legacy=name in legacy_names)
+        typer.echo(result.report.render())
+        integ.add_repo(result.report)
+        total_indexed += result.report.indexed
+        if not dry_run and result.docs:
+            written = persist(result.docs, out_dir, result.canonical_repo)
+            total_written += written
+            typer.echo(f"  wrote {written} doc(s) → {out_dir / result.canonical_repo}")
+        if not (result.report.error or result.report.duplicate_error):
+            pr = prune_stale_compiled(
+                result.docs,
+                out_dir,
+                result.canonical_repo,
+                apply=not dry_run,
+                force=force,
+            )
+            any_needs_force = (
+                _echo_prune(pr, result.canonical_repo, out_dir) or any_needs_force
+            )
+        typer.echo("")
+
+    # 整仓退役清理: 仅在全量 registry(无 --repo 子集)且未降级时跑。
+    if not repo and not degraded_warn:
+        rp = prune_retired_repos(out_dir, set(repos), apply=not dry_run, force=force)
+        any_needs_force = _echo_retired(rp, out_dir) or any_needs_force
+
+    mode = "dry-run" if dry_run else "compiled"
+    tail = "" if dry_run else f", wrote {total_written}"
+    typer.echo(
+        f"[{mode}] indexed {total_indexed} doc(s){tail} across {len(repos)} repo(s)"
+    )
+    _echo_integrity(integ)
+    if any_needs_force:
+        raise typer.Exit(code=EXIT_NEEDS_FORCE)
+    if integ.has_findings:
+        raise typer.Exit(code=EXIT_INTEGRITY)
+
+
+@app.command(name="sync")
+def sync_cmd(
+    repo: list[str] = typer.Option(
+        None, "--repo", help="name=path(可重复);省略则用默认源仓列表"
+    ),
+    apply: bool = typer.Option(
+        False, "--apply", help="真写 qdrant + 落盘 compiled(默认 dry-run 零写入)"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="放行 mass-prune 守卫(单仓待删 >50%)"
+    ),
+    out: Path = typer.Option(
+        None, "--out", help=f"compiled doc 落点(默认 {settings.compiled_dir})"
+    ),
+    legacy: bool = typer.Option(
+        False,
+        "--legacy",
+        help="把本次 --repo 输入按 legacy/raw/unverified source 同步",
+    ),
+) -> None:
+    """compile + qdrant sync(两级 reuse + prune 守卫);默认 dry-run 只报告。
+
+    退出码: 0 全绿 / 1 硬失败 / 2 prune 守卫拒绝需人工 --force / 3 内容完整性发现
+    (仅在无 1/2 时)。
+    """
+    from memex.indexing.sync import SyncMode, sync_repo
+
+    repos, registry_legacy, degraded_warn = _resolve_repos(repo)
+    legacy_names = frozenset(repos) if legacy else registry_legacy
+    if degraded_warn:
+        typer.echo(degraded_warn)
+    out_dir = out.expanduser() if out is not None else settings.compiled_dir
+
+    any_error = False
+    any_needs_force = False
+    integ = IntegrityReport()
+    for name, path in repos.items():
+        c_out, s_rep = sync_repo(
+            name,
+            path,
+            mode=SyncMode(apply=apply, force=force),
+            legacy=name in legacy_names,
+            progress=_echo_sync_progress,
+        )
+        typer.echo(c_out.report.render())
+        integ.add_repo(c_out.report)
+        typer.echo(s_rep.render())
+        if apply and c_out.docs:
+            written = persist(c_out.docs, out_dir, c_out.canonical_repo)
+            typer.echo(
+                f"  wrote {written} compiled doc(s) → {out_dir / c_out.canonical_repo}"
+            )
+        if not (c_out.report.error or c_out.report.duplicate_error):
+            pr = prune_stale_compiled(
+                c_out.docs, out_dir, c_out.canonical_repo, apply=apply, force=force
+            )
+            any_needs_force = (
+                _echo_prune(pr, c_out.canonical_repo, out_dir) or any_needs_force
+            )
+        any_error = any_error or bool(s_rep.error) or bool(s_rep.failures)
+        any_needs_force = any_needs_force or s_rep.needs_force
+        typer.echo("")
+    _echo_integrity(integ)
+    if any_error:
+        raise typer.Exit(code=EXIT_FAILURE)
+    if any_needs_force:
+        raise typer.Exit(code=EXIT_NEEDS_FORCE)
+    if integ.has_findings:
+        raise typer.Exit(code=EXIT_INTEGRITY)
+
+
+@app.command(name="sync-all")
+def sync_all_cmd(  # noqa: C901, PLR0912, PLR0915 — typer 命令: 选项解析 + 逐仓循环 + 退出码/汇总编排天然长, 抽函数只会把单一命令打散
+    apply: bool = typer.Option(
+        False, "--apply", help="真写 qdrant + 落盘 compiled(默认 dry-run 零写入)"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="放行 mass-prune 守卫(单仓待删 >50%)"
+    ),
+    out: Path = typer.Option(
+        None, "--out", help=f"compiled doc 落点(默认 {settings.compiled_dir})"
+    ),
+) -> None:
+    """orchestrator: 遍历 registry 串行 sync 各源仓;单仓失败继续。
+
+    退出码: 0 全绿 / 1 任一仓硬失败 / 2 无硬失败但有 prune 拒绝(需人工 --force)/
+    3 无 1/2 但有内容完整性发现(日审 cadence 据此告警)。
+    """
+    from memex.indexing.qdrant import Qdrant, QdrantError
+    from memex.indexing.sync import (
+        SyncMode,
+        prune_retired_qdrant_points,
+        sync_repo,
+    )
+
+    reg = load_source_registry()
+    out_dir = out.expanduser() if out is not None else settings.compiled_dir
+
+    summaries: list[str] = []
+    all_failures: list[tuple[str, str]] = []
+    needs_force: list[tuple[str, str]] = []  # (repo, prune_refused 文案)
+    failed_repos = 0
+    integ = IntegrityReport()
+    for name, path in reg.repos.items():
+        typer.echo(f">>> sync-all {name}  ({path})")
+        try:
+            c_out, s_rep = sync_repo(
+                name,
+                path,
+                mode=SyncMode(apply=apply, force=force),
+                legacy=name in reg.legacy,
+                progress=_echo_sync_progress,
+            )
+        except Exception as exc:  # 单仓意外崩溃不中断全批(D4)
+            summaries.append(f"{name}: CRASH — {exc}")
+            all_failures.append((name, f"crash: {exc}"))
+            failed_repos += 1
+            continue
+        typer.echo(c_out.report.render())
+        integ.add_repo(c_out.report)
+        typer.echo(s_rep.render())
+        if apply and c_out.docs:
+            written = persist(c_out.docs, out_dir, c_out.canonical_repo)
+            typer.echo(
+                f"  wrote {written} compiled doc(s) → {out_dir / c_out.canonical_repo}"
+            )
+        if not (c_out.report.error or c_out.report.duplicate_error):
+            pr = prune_stale_compiled(
+                c_out.docs, out_dir, c_out.canonical_repo, apply=apply, force=force
+            )
+            if _echo_prune(pr, c_out.canonical_repo, out_dir):
+                needs_force.append((name, pr.refused or ""))
+        typer.echo("")
+        summaries.append(f"indexed {c_out.report.indexed} | {s_rep.summary_line()}")
+        if s_rep.error:
+            all_failures.append((name, s_rep.error))
+        all_failures.extend((f"{name}:{ident}", err) for ident, err in s_rep.failures)
+        if s_rep.error or s_rep.failures:
+            failed_repos += 1
+        if s_rep.needs_force:
+            needs_force.append((name, s_rep.prune_refused or ""))
+
+    # 整仓退役清理: 只在全量 registry 且未降级时跑 —— 降级 fallback 仅含
+    # 内置默认, 会把所有真实 compiled 目录误判退役。
+    if not reg.degraded:
+        rp = prune_retired_repos(out_dir, set(reg.repos), apply=apply, force=force)
+        if _echo_retired(rp, out_dir):
+            needs_force.append(("<retired-repos>", rp.refused or ""))
+        # qdrant 侧退役清理: compiled 整目录 prune 的对偶 ——
+        # 改名后旧 identity 的点 per-repo prune scope 不到, 需全量按 repo 段清。
+        try:
+            qp = prune_retired_qdrant_points(
+                Qdrant(settings),
+                settings.central_collection,
+                set(reg.repos),
+                apply=apply,
+                force=force,
+            )
+        except QdrantError as exc:
+            msg = f"qdrant 退役清理失败: {exc}"
+            typer.echo(f"retired-qdrant-prune ERROR: {msg}")
+            all_failures.append(("<retired-qdrant>", msg))
+            failed_repos += 1
+        else:
+            if qp.refused:
+                typer.echo(f"retired-qdrant-prune REFUSED: {qp.refused}")
+                needs_force.append(("<retired-qdrant>", qp.refused))
+            elif qp.point_count:
+                verb = "deleted" if qp.deleted else "would delete"
+                typer.echo(
+                    f"retired-qdrant-prune {verb} {qp.point_count} 退役点 "
+                    f"(repos: {', '.join(qp.retired_repos)}) ← {settings.central_collection}"
+                )
+
+    typer.echo(f"=== sync-all 汇总 [{'apply' if apply else 'dry-run'}] ===")
+    if reg.degraded:
+        typer.echo(
+            f"WARN: 源仓清单降级到内置默认(kb-sources.toml 不可用: {reg.reason})"
+        )
+    for line in summaries:
+        typer.echo(line)
+    if all_failures:
+        typer.echo(f"总失败清单 [{len(all_failures)}]:")
+        for ident, err in all_failures:
+            typer.echo(f"  - {ident}: {err}")
+    if needs_force:
+        typer.echo(f"需人工介入(--force) [{len(needs_force)}]:")
+        for name, msg in needs_force:
+            typer.echo(f"  - {name}: {msg}")
+    _echo_integrity(integ)
+    if failed_repos:
+        typer.echo(f"{failed_repos} repo(s) failed")
+        raise typer.Exit(code=EXIT_FAILURE)
+    if needs_force:
+        raise typer.Exit(code=EXIT_NEEDS_FORCE)
+    if integ.has_findings:
+        raise typer.Exit(code=EXIT_INTEGRITY)
+
+
+@app.command(name="doctor")
+def doctor_cmd(
+    out: Path = typer.Option(
+        None, "--out", help=f"compiled doc 落点(默认 {settings.compiled_dir})"
+    ),
+) -> None:
+    """对账中央 collection 点 ↔ 盘上 compiled: 孤儿(compiled_doc_missing)→ exit≠0。
+
+    Pharos CommandCheck 入口(周期 backstop): exit 0 全绿; 非 0 = 有孤儿点或读失败,
+    stderr 带诊断摘要(数量+修法+例子)。孤儿 = 向量在、compiled 文件缺 → recall
+    semantic 降级 lexical。诊断直接跑本命令看全量明细; 修见 stderr 提示。
+    """
+    from memex.indexing.doctor import check_compiled_consistency
+    from memex.indexing.qdrant import Qdrant
+
+    out_dir = out.expanduser() if out is not None else settings.compiled_dir
+    report = check_compiled_consistency(
+        Qdrant(settings), out_dir, collection=settings.central_collection
+    )
+    typer.echo(report.render())  # 全量明细进 stdout
+    if report.healthy:
+        return
+    typer.echo(report.alert_detail(), err=True)  # 摘要进 stderr(Pharos 抓为 detail)
+    raise typer.Exit(code=EXIT_FAILURE)
+
+
+def run() -> None:
+    """Console-script entry。"""
+    app()
+
+
+if __name__ == "__main__":
+    run()

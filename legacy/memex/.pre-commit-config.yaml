@@ -1,0 +1,26 @@
+# 装: uv tool install pre-commit --with pre-commit-uv
+# 心智: 本地提速反馈; 真正强制 gate 在 CI。
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.16
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: "0.11.19"
+    hooks:
+      - id: uv-lock
+  - repo: local
+    hooks:
+      - id: rhizome-check
+        name: rhizome check (KB commit gate)
+        entry: rhizome check
+        language: system
+        files: \.md$
+      - id: release-gate
+        name: release-gate scan (blocks only)
+        entry: bash -c 'blocks=$(repo-release-gate scan --repo . --json 2>/dev/null | python3 -c "import json,sys;print(json.load(sys.stdin)[\"counts\"][\"block\"])" 2>/dev/null || echo 1); if [ "$blocks" -gt 0 ]; then repo-release-gate scan --repo . 2>&1 | grep block; exit 1; fi'
+        language: system
+        pass_filenames: false
+        always_run: true

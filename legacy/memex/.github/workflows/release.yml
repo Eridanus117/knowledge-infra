@@ -1,0 +1,13 @@
+name: Release
+
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    uses: source-gamma/.github/.github/workflows/python-release.yml@62bfc4a14ab28fc932919f6d2d350f465b188494 # v12

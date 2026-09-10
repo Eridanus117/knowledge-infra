@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.pyrefly_cache/
+.codegraph/
+.env
+*.db
+*.sqlite
+*.sqlite3
+.repo-release-gate.local.toml
+.source-beta-release-gate.local.toml
+
+# Local assistant guidance kept outside release artifacts
+AGENTS.md
+CLAUDE.md
+
+eval/results/
