@@ -1,0 +1,148 @@
+# rhizome
+
+`rhizome` 是一个去中心知识库的 authoring/校验 CLI。它把知识以 Markdown + frontmatter
+的形式分散存在多个普通 Git 仓里，每个仓自带域树（domain tree），由 `INDEX.md` 文件
+自发现。`rhizome` 本身不集中存储数据，也不绑定任何检索引擎——它只管写入契约和提交门禁。
+
+## 核心概念
+
+- **note**：一篇 Markdown 文件，带 5 字段 frontmatter（description、keywords、kind、links、code）。
+- **domain**：一个带 `INDEX.md` 的目录，是知识的归属节点。
+- **identity**：`<repo>:<domain>:<slug>`，完全由文件位置推导，无 uuid。
+- **registry**：`kb-sources.toml`，手工维护的源仓列表。
+- **检索引擎解耦**：`rhizome` 只写入和校验；检索（向量/全文）由外部引擎对接，不在本工具范围内。
+
+## 命令
+
+| 命令 | 作用 |
+|---|---|
+| `rhizome new <slug>` | 建一篇 5 字段 frontmatter note，body 从 stdin 读取。 |
+| `rhizome check [files]` | 校验 frontmatter 契约；`--fix` 自动剔除 legacy 字段。 |
+| `rhizome check --duplicate-domains` | 校验同仓无重名 C2 domain。 |
+| `rhizome check --staged-frozen` | 阻断对 frozen 文档的删除/重命名。 |
+| `rhizome domains` | 列出所有源仓及其域树。 |
+| `rhizome domains --diff` | 与 Qdrant 中心集合对账，看哪些 domain 尚未索引。 |
+| `rhizome adopt <repo>` | 一键纳管一个仓：写 registry 行 + INDEX 骨架 + lefthook 门禁。 |
+| `rhizome capture <text>` | 低摩擦闪念捕获：一行带时间戳 append 到 inbox（raw、出 KB 边界、不索引），之后 triage 进 `new`/source-beta。默认 `~/.config/rhizome/inbox.md`，`$RHIZOME_INBOX` 可覆盖。 |
+| `rhizome doctor --sources` | 只读检查各注册源的门禁声明、命令可解析性与 INDEX；`--json` 输出结构化报告。 |
+
+### doctor 的门禁探测
+
+`gate-present` 优先沿用源目录的 `lefthook.yml`、`.pre-commit-config.yaml`
+及既有 Python/TypeScript wrapper 探测。未命中时才询问 Git 生效的
+`pre-commit` 路径，因此支持仓内嵌套源、linked worktree 和相对或绝对
+`core.hooksPath`；被覆盖的 `.git/hooks/pre-commit` 不会成为后备证据。
+
+Git 后备只静态识别行首的 `rhizome check` 或 `exec rhizome check`，允许引号参数、
+行尾注释和 `|| exit 1`。不会执行 hook、追踪任意 shell wrapper 或证明条件分支可达；
+heredoc 和跨行引号保守不通过。Git 不可用时仍保留原配置探测，
+但没有证据就报告失败；这不是对所有 hook 框架安装或执行状态的全面审计。
+
+## 安装
+
+运行环境使用 [GitHub Releases](https://github.com/source-gamma/rhizome/releases) 中的
+自包含二进制，不需要 Python、`uv` 或本地源码仓。每个 release 提供
+`rhizome-<os>-<arch>` 和 `SHA256SUMS`；安装器必须先校验 checksum。
+
+Linux x86_64 产物以 Ubuntu 22.04 为兼容基线。直接安装 macOS arm64 版本：
+
+```sh
+base=https://github.com/source-gamma/rhizome/releases/latest/download
+curl -fL "$base/rhizome-darwin-arm64" -o /tmp/rhizome-darwin-arm64
+curl -fL "$base/SHA256SUMS" -o /tmp/rhizome-SHA256SUMS
+(cd /tmp && grep '  rhizome-darwin-arm64$' rhizome-SHA256SUMS | shasum -a 256 -c -)
+install -m 0755 /tmp/rhizome-darwin-arm64 ~/.local/bin/rhizome
+```
+
+仓内提交门禁单独安装：
+
+```sh
+pre-commit install --install-hooks
+```
+
+## 开发
+
+```sh
+uv sync --group dev
+uv run rhizome --help
+uv run pytest
+```
+
+运行 `./scripts/build-release.sh` 可在 `dist/release/` 生成当前 OS/arch 的二进制。
+Pull request 会先在双平台构建和 smoke test；推送与 `pyproject.toml` 版本一致的
+`v*` tag 后才生成 `SHA256SUMS` 并发布不可变 release。
+
+## 配置
+
+`rhizome` 查找 registry 的顺序：
+
+1. `$KB_SOURCES` 环境变量，直接指向 `kb-sources.toml` 文件。
+2. 从当前目录向上查找 `kb-sources.toml`。
+3. `$KB_WORKSPACE_ROOT/kb-sources.toml`（默认 `~/workspace`）。
+4. `~/.config/rhizome/sources.toml`。
+
+registry 同目录可以放 `<stem>.local.toml`（例如 XDG 配置对应
+`~/.config/rhizome/sources.local.toml`），只覆盖已有 source 的机器本地
+`path`、`surface`、`legacy`；逻辑 source 清单仍由基础 registry 决定。
+
+`kb-sources.toml` 示例：
+
+```toml
+workspace_root = "~/workspace"
+
+[[source]]
+name = "my-kb"
+
+[[source]]
+name = "another-kb"
+path = "~/notes/another-kb"
+```
+
+## frontmatter 契约
+
+```yaml
+---
+description: "一句话描述，供检索用"
+keywords: [关键词1, 关键词2]
+kind: note          # spec / reference / runbook / decision / research / note / index
+links: [other-note-slug]
+code: [repo/path/to/file.py]
+---
+```
+
+`kind: decision` 额外支持 `assets`（交付资产列表）和 `supersedes`（取代旧决策）字段。
+
+## Mermaid 校验（可选）
+
+`mermaid-validator/` 是一个可选的 Node.js sidecar，用 Mermaid 自身的 JS 解析器
+校验文档中的 Mermaid 代码块。启用方式：
+
+```sh
+npm ci --prefix mermaid-validator
+```
+
+未安装时，包含 Mermaid 块的文档在提交时会报 ERROR（需 node 在 PATH 上）。
+
+## 开发检查
+
+```sh
+npm ci --prefix mermaid-validator
+uv run pytest -ra
+uvx ruff@0.15.16 check .
+uvx ruff@0.15.16 format --check .
+```
+
+完整测试需要 Python 3.12+、Git，以及满足 sidecar 锁文件版本要求的 Node.js/npm。
+Windows 使用 Git for Windows 提供的 `sh` 执行临时 Git hook；上述命令可直接在
+PowerShell 中运行。`npm ci` 只安装既有锁定的解析器依赖，不下载浏览器，
+不需要外部检索服务。未安装 sidecar 时，两个 Mermaid 解析用例会因缺少依赖跳过，
+不能将这样的结果称为完整 Windows 验收；安装后 Windows 仅跳过 POSIX 执行位检查。
+
+测试中的 TOML 路径按字符串序列化，生成文件显式按 UTF-8 读写；
+临时 hook 的 Python 路径及 `PYTHONPATH` 按 shell 参数引用。不要依赖
+`PYTHONUTF8`、手工替换路径分隔符或放宽冻结门禁来获得通过结果。
+冻结测试先确认准备提交成功，再通过真实 hook 校验批准修改、未批准拦截和内容错误拦截。
+
+## 许可证
+
+MIT

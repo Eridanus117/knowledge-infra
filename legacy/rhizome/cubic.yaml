@@ -1,0 +1,35 @@
+# yaml-language-server: $schema=https://cubic.dev/schema/cubic-repository-config.schema.json
+
+version: 1
+reviews:
+  enabled: true
+  sensitivity: medium
+  incremental_commits: true
+  check_drafts: false
+  architecture_diagrams: false
+  external_contributors_require_manual_review: false
+  resolve_threads_when_addressed: true
+  auto_approve_behavior: disabled
+  auto_approve: disabled
+  auto_ultrareview: disabled
+  custom_instructions: |
+    Review as a local-first Python CLI tool in the orrery workspace. Use AGENTS.md and README.md as the source of truth when available. Prioritize correctness, data safety, CLI compatibility, and tests. Do not request changes for style-only points already covered by ruff.
+  ignore:
+    files:
+      - uv.lock
+      - dist/**
+      - build/**
+      - "*.egg-info/**"
+      - "**/__pycache__/**"
+    pr_labels:
+      - skip-review
+      - no-ai-review
+    max_changed_lines: 3000
+  custom_rules:
+    - name: CLI behavior and docs stay in sync
+      description: If a command, flag, default, output contract, or visible error changes, verify that README.md and the relevant docs are updated in the same PR.
+    - name: Workflow supply-chain hardening
+      description: In GitHub Actions changes, flag broad token permissions, unpinned action references, credential persistence, or pull_request workflows that can expose secrets.
+
+pr_descriptions:
+  generate: true

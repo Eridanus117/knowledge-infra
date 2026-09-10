@@ -1,0 +1,742 @@
+"""rhizome doctor --sources: fleet pipeline-integrity check.
+
+沿用 test_adopt.py 的临时 registry 和目录 fixture.
+原有检查使用模拟 which, 新 Git hook 回归只运行 Git 元数据命令,
+不执行任何 hook 或脚本. 覆盖 gate, INDEX, fleet 结果及 CLI.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import io
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from rhizome import doctor
+from rhizome.cli import main
+
+_LEFTHOOK_OK = (
+    "pre-commit:\n  commands:\n    kb-check:\n      run: rhizome check {staged_files}\n"
+)
+_INDEX = (
+    '---\ndescription: "seed domain"\nkeywords: [seed]\nkind: index\n---\n\n# seed\n'
+)
+
+
+def _which(name):  # both lefthook and rhizome "found"
+    return f"/fake/bin/{name}"
+
+
+def _which_no_rhizome(name):
+    return None if name == "rhizome" else f"/fake/bin/{name}"
+
+
+class TestDoctor(unittest.TestCase):
+    def setUp(self):
+        self._env = {
+            k: os.environ.pop(k, None) for k in ("KB_SOURCES", "KB_WORKSPACE_ROOT")
+        }
+
+    def tearDown(self):
+        for k, v in self._env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    # ---- fixtures -----------------------------------------------------------
+
+    def _ws(self, tmp: str) -> tuple[Path, Path]:
+        ws = Path(tmp) / "ws"
+        ws.mkdir()
+        reg = Path(tmp) / "kb-sources.toml"
+        reg.write_text(
+            f"workspace_root = {json.dumps(str(ws), ensure_ascii=False)}\n",
+            encoding="utf-8",
+        )
+        return ws, reg
+
+    def _source(
+        self, reg: Path, name: str, repo: Path | None = None, *, legacy: bool = False
+    ) -> None:
+        text = reg.read_text(encoding="utf-8").rstrip("\n") + "\n\n"
+        text += f'[[source]]\nname = "{name}"\n'
+        if repo is not None:
+            text += f"path = {json.dumps(str(repo), ensure_ascii=False)}\n"
+        if legacy:
+            text += "legacy = true\n"
+        reg.write_text(text, encoding="utf-8")
+
+    def _repo(
+        self,
+        parent: Path,
+        name: str,
+        *,
+        gate: str | None = _LEFTHOOK_OK,
+        precommit: str | None = None,
+        domain: str | None = "docs",
+    ) -> Path:
+        """Build a repo with optional gate file(s) and a docs/INDEX.md domain."""
+        repo = parent / name
+        repo.mkdir(parents=True)
+        if gate is not None:
+            (repo / "lefthook.yml").write_text(gate, encoding="utf-8")
+        if precommit is not None:
+            (repo / ".pre-commit-config.yaml").write_text(precommit, encoding="utf-8")
+        if domain is not None:
+            d = repo / domain
+            d.mkdir(parents=True)
+            (d / "INDEX.md").write_text(_INDEX, encoding="utf-8")
+        return repo
+
+    # ---- the happy path -----------------------------------------------------
+
+    def test_all_green(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            self._repo(ws, "alpha")
+            self._repo(ws, "beta")
+            self._source(reg, "alpha")
+            self._source(reg, "beta")
+            report = doctor.run_doctor(registry=reg, which=_which)
+            self.assertTrue(report["ok"])
+            self.assertEqual(len(report["sources"]), 2)
+            for r in report["sources"]:
+                self.assertTrue(r["ok"])
+                self.assertEqual({c["status"] for c in r["checks"]}, {doctor.PASS})
+
+    # ---- domain-capacity guidance (ADR-044) ---------------------------------
+
+    def _fill_domain(self, repo: Path, domain: str, n: int) -> None:
+        d = repo / domain
+        d.mkdir(parents=True, exist_ok=True)
+        if not (d / "INDEX.md").exists():
+            (d / "INDEX.md").write_text(_INDEX, encoding="utf-8")
+        for i in range(n):
+            (d / f"note-{i}.md").write_text("# n\n", encoding="utf-8")
+
+    def test_domain_capacity_warns_without_failing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            repo = self._repo(ws, "alpha")
+            self._fill_domain(repo, "docs", doctor.DOMAIN_CAPACITY_GUIDE + 1)
+            self._fill_domain(repo, "docs/sub", 1)  # owned by the sub-domain
+            self._fill_domain(repo, "decisions", doctor.DOMAIN_CAPACITY_GUIDE + 5)
+            self._source(reg, "alpha")
+            report = doctor.run_doctor(registry=reg, which=_which)
+            self.assertTrue(report["ok"])  # WARN never flips ok
+            row = report["sources"][0]
+            self.assertTrue(row["ok"])
+            cap = next(c for c in row["checks"] if c["check"] == "domain-capacity")
+            self.assertEqual(cap["status"], doctor.WARN)
+            self.assertIn(
+                f"docs ({doctor.DOMAIN_CAPACITY_GUIDE + 1} notes)", cap["detail"]
+            )
+            self.assertNotIn("decisions", cap["detail"])  # ADR archive exempt
+            self.assertNotIn("docs/sub", cap["detail"])  # under guide
+
+    def test_precommit_framework_gate_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            self._repo(
+                ws,
+                "alpha",
+                gate=None,
+                precommit="repos:\n  - repo: local\n    hooks:\n      - entry: rhizome check\n",
+            )
+            self._source(reg, "alpha")
+            report = doctor.run_doctor(registry=reg, which=_which)
+            self.assertTrue(report["ok"])
+            gate = next(
+                c
+                for c in report["sources"][0]["checks"]
+                if c["check"] == "gate-present"
+            )
+            self.assertEqual(gate["status"], doctor.PASS)
+            self.assertIn(".pre-commit-config.yaml", gate["detail"])
+
+    def test_python_wrapper_gate_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            repo = self._repo(
+                ws,
+                "alpha",
+                gate="pre-commit:\n  commands:\n    kb-check:\n      run: python tools/check.py\n",
+            )
+            tools = repo / "tools"
+            tools.mkdir()
+            (tools / "check.py").write_text(
+                'subprocess.run(["rhizome", "check", *files])\n',
+                encoding="utf-8",
+            )
+            self._source(reg, "alpha")
+            report = doctor.run_doctor(registry=reg, which=_which)
+            self.assertTrue(report["ok"])
+            gate = next(
+                c
+                for c in report["sources"][0]["checks"]
+                if c["check"] == "gate-present"
+            )
+            self.assertEqual(gate["status"], doctor.PASS)
+
+    def test_old_kb_check_name_tolerated(self):
+        # adopt tolerates the legacy `kb check` name in the gate file; doctor must
+        # agree (otherwise it would flag every not-yet-migrated repo as gateless).
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            self._repo(
+                ws,
+                "alpha",
+                gate="pre-commit:\n  commands:\n    kb-check:\n      run: kb check\n",
+            )
+            self._source(reg, "alpha")
+            report = doctor.run_doctor(registry=reg, which=_which)
+            gate = next(
+                c
+                for c in report["sources"][0]["checks"]
+                if c["check"] == "gate-present"
+            )
+            self.assertEqual(gate["status"], doctor.PASS)
+
+    # ---- failure modes (each must name a diagnostic reason) -----------------
+
+    def test_gate_missing_fails_with_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            self._repo(ws, "alpha", gate=None)  # no lefthook.yml, no pre-commit
+            self._source(reg, "alpha")
+            report = doctor.run_doctor(registry=reg, which=_which)
+            self.assertFalse(report["ok"])
+            gate = next(
+                c
+                for c in report["sources"][0]["checks"]
+                if c["check"] == "gate-present"
+            )
+            self.assertEqual(gate["status"], doctor.FAIL)
+            self.assertIn("no KB commit gate", gate["detail"])
+            self.assertIn("lefthook.yml (absent)", gate["detail"])
+
+    def test_commented_gate_is_not_enough(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            self._repo(
+                ws, "alpha", gate="# rhizome check lives here someday\npre-commit:\n"
+            )
+            self._source(reg, "alpha")
+            report = doctor.run_doctor(registry=reg, which=_which)
+            gate = next(
+                c
+                for c in report["sources"][0]["checks"]
+                if c["check"] == "gate-present"
+            )
+            self.assertEqual(gate["status"], doctor.FAIL)
+            self.assertIn("no `rhizome check` command", gate["detail"])
+
+    def test_gate_unresolvable_fails_fleet_wide(self):
+        # which(rhizome)=None → the gate dies exit 127 in every repo's fresh shell.
+        # This is the exact kb→rhizome rename bug this check was written for.
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            self._repo(ws, "alpha")
+            self._repo(ws, "beta")
+            self._source(reg, "alpha")
+            self._source(reg, "beta")
+            report = doctor.run_doctor(registry=reg, which=_which_no_rhizome)
+            self.assertFalse(report["ok"])
+            self.assertFalse(report["gate_resolvable"]["ok"])
+            self.assertIn("which(rhizome)=None", report["gate_resolvable"]["detail"])
+            for r in report["sources"]:  # every repo fails the resolvable check
+                res = next(c for c in r["checks"] if c["check"] == "gate-resolvable")
+                self.assertEqual(res["status"], doctor.FAIL)
+                self.assertFalse(r["ok"])
+
+    def test_no_index_fails_with_reason(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            self._repo(ws, "alpha", domain=None)  # gate ok, but no INDEX.md
+            self._source(reg, "alpha")
+            report = doctor.run_doctor(registry=reg, which=_which)
+            self.assertFalse(report["ok"])
+            idx = next(
+                c
+                for c in report["sources"][0]["checks"]
+                if c["check"] == "index-present"
+            )
+            self.assertEqual(idx["status"], doctor.FAIL)
+            self.assertIn("no INDEX.md domain found", idx["detail"])
+
+    def test_missing_repo_is_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            self._source(reg, "ghost", repo=ws / "does-not-exist")
+            report = doctor.run_doctor(registry=reg, which=_which)
+            self.assertFalse(report["ok"])
+            r = report["sources"][0]
+            self.assertFalse(r["ok"])
+            self.assertEqual(r["checks"][0]["check"], "repo-exists")
+            self.assertIn("does not exist", r["checks"][0]["detail"])
+
+    def test_one_bad_source_fails_whole_fleet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            self._repo(ws, "good")
+            self._repo(ws, "bad", gate=None)
+            self._source(reg, "good")
+            self._source(reg, "bad")
+            report = doctor.run_doctor(registry=reg, which=_which)
+            self.assertFalse(report["ok"])  # one fail → fleet fail
+            ok = {r["name"]: r["ok"] for r in report["sources"]}
+            self.assertEqual(ok, {"good": True, "bad": False})
+
+    def test_legacy_source_skips_gate_and_index_checks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            self._repo(ws, "normal")
+            legacy = self._repo(ws, "legacy", gate=None, domain=None)
+            (legacy / "raw-note.md").write_text("# raw\n", encoding="utf-8")
+            self._source(reg, "normal")
+            self._source(reg, "legacy", legacy=True)
+            report = doctor.run_doctor(registry=reg, which=_which)
+            self.assertTrue(report["ok"])
+            self.assertEqual(
+                [r["name"] for r in report["sources"]], ["normal", "legacy"]
+            )
+            row = report["sources"][1]
+            self.assertTrue(row["legacy"])
+            self.assertEqual(
+                {c["check"] for c in row["checks"]},
+                {"repo-exists", "legacy-source"},
+            )
+            self.assertEqual({c["status"] for c in row["checks"]}, {doctor.PASS})
+            self.assertIn(
+                "INDEX checks intentionally skipped", row["checks"][1]["detail"]
+            )
+
+    # ---- CLI wiring ---------------------------------------------------------
+
+    def test_cli_exit_nonzero_on_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            self._repo(ws, "bad", gate=None)
+            self._source(reg, "bad")
+            os.environ["KB_SOURCES"] = str(reg)
+            err = io.StringIO()
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(err),
+            ):
+                rc = main(["doctor", "--sources"])
+            self.assertEqual(rc, 1)
+            self.assertIn("FAIL", err.getvalue())
+
+    def test_cli_exit_zero_all_green(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            self._repo(ws, "alpha")
+            self._source(reg, "alpha")
+            os.environ["KB_SOURCES"] = str(reg)
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                rc = main(["doctor", "--sources"])
+            self.assertEqual(rc, 0)
+
+    def test_cli_json_shape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws, reg = self._ws(tmp)
+            self._repo(ws, "alpha")
+            self._source(reg, "alpha")
+            os.environ["KB_SOURCES"] = str(reg)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = main(["doctor", "--sources", "--json"])
+            self.assertEqual(rc, 0)
+            report = json.loads(out.getvalue())
+            self.assertTrue(report["ok"])
+            self.assertEqual([r["name"] for r in report["sources"]], ["alpha"])
+            self.assertEqual(
+                {c["check"] for c in report["sources"][0]["checks"]},
+                {"gate-present", "gate-resolvable", "index-present", "domain-capacity"},
+            )
+            self.assertIn("gate_resolvable", report)
+
+    def test_cli_requires_sources_flag(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = main(["doctor"])
+        self.assertEqual(rc, 2)
+        self.assertIn("--sources", err.getvalue())
+
+    def test_cli_missing_registry_loud(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["KB_SOURCES"] = str(Path(tmp) / "nope.toml")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = main(["doctor", "--sources"])
+            self.assertEqual(rc, 2)
+            self.assertIn("missing file", err.getvalue())
+
+
+class TestDoctorGitHook(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
+        env.update(
+            GIT_CONFIG_GLOBAL=os.devnull,
+            GIT_CONFIG_NOSYSTEM="1",
+        )
+        self.enterContext(patch.dict(os.environ, env, clear=True))
+        self.git = shutil.which("git")
+
+    def _git(self, repo: Path, *args: str) -> None:
+        if self.git is None:
+            self.skipTest("需要 Git")
+        subprocess.run(
+            [self.git, "-C", str(repo), *args],
+            check=True,
+            capture_output=True,
+            timeout=20,
+        )
+
+    def _repo(self) -> Path:
+        repo = self.tmp / "仓库 空格 & 路径"
+        repo.mkdir()
+        self._git(repo, "init", "--quiet", "--template=")
+        return repo
+
+    def _worktree(self, repo: Path) -> Path:
+        # 必须在创建任何 hook 前提交, fixture 绝不执行 hook.
+        self._git(
+            repo,
+            "-c",
+            "user.name=Doctor Fixture",
+            "-c",
+            "user.email=doctor@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "-m",
+            "fixture",
+        )
+        worktree = self.tmp / "关联 工作树"
+        self._git(repo, "worktree", "add", "--quiet", "--detach", str(worktree))
+        return worktree
+
+    def _hook(self, directory: Path, body: str = "rhizome check\n") -> Path:
+        directory.mkdir(parents=True, exist_ok=True)
+        hook = directory / "pre-commit"
+        hook.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+        hook.chmod(0o755)
+        return hook
+
+    def test_nested_source_uses_relative_hooks_path(self):
+        repo = self._repo()
+        source = repo / "资料 空格" / "知识库"
+        docs = source / "docs"
+        docs.mkdir(parents=True)
+        (docs / "INDEX.md").write_text(_INDEX, encoding="utf-8")
+        self._git(repo, "config", "core.hooksPath", ".团队 hooks")
+        self._hook(repo / ".团队 hooks")
+
+        report = doctor.check_source(
+            "nested", source, gate_resolvable=(True, "fixture")
+        )
+
+        self.assertTrue(report["ok"])
+        gate = next(c for c in report["checks"] if c["check"] == "gate-present")
+        self.assertEqual(gate["status"], doctor.PASS)
+
+    def test_linked_worktree_uses_shared_default_hooks(self):
+        repo = self._repo()
+        worktree = self._worktree(repo)
+        self._hook(repo / ".git" / "hooks")
+
+        self.assertTrue(doctor._gate_present(worktree)[0])
+
+    def test_linked_worktree_resolves_relative_and_absolute_hooks_paths(self):
+        repo = self._repo()
+        worktree = self._worktree(repo)
+        relative = ".团队 hooks"
+        self._git(repo, "config", "core.hooksPath", relative)
+        self._hook(repo / relative)
+        self.assertFalse(doctor._gate_present(worktree)[0])
+
+        self._hook(worktree / relative)
+        self.assertTrue(doctor._gate_present(worktree)[0])
+
+        self._hook(worktree / relative, "echo 'rhizome check'\n")
+        absolute = self.tmp / "外部 共享 hooks"
+        self._git(repo, "config", "core.hooksPath", absolute.as_posix())
+        self.assertFalse(doctor._gate_present(worktree)[0])
+
+        self._hook(absolute)
+        self.assertTrue(doctor._gate_present(worktree)[0])
+
+    def test_only_effective_hook_counts(self):
+        repo = self._repo()
+        self._hook(repo / ".githooks")
+        self.assertFalse(doctor._gate_present(repo)[0])
+
+        self._hook(repo / ".git" / "hooks")
+        self.assertTrue(doctor._gate_present(repo)[0])
+
+        self._git(repo, "config", "core.hooksPath", ".其他 hooks")
+        self.assertFalse(doctor._gate_present(repo)[0])
+
+    def test_native_hook_requires_direct_shell_command(self):
+        repo = self._repo()
+        scripts = repo / "scripts"
+        scripts.mkdir()
+        (scripts / "check.sh").write_text("rhizome check\n", encoding="utf-8")
+        bodies = {
+            "comment": "# rhizome check\n",
+            "echo": "echo 'rhizome check'\n",
+            "checkout": "rhizome checkout\n",
+            "wrapper": "sh scripts/check.sh\n",
+            "heredoc": "rhizome check\ncat <<'EOF'\nrhizome check\nEOF\n",
+            "multiline_quote": 'rhizome check\nmessage="notes\nrhizome check\n"\n',
+        }
+        for label, body in bodies.items():
+            with self.subTest(label=label):
+                self._hook(repo / ".git" / "hooks", body)
+                self.assertFalse(doctor._gate_present(repo)[0])
+
+    def test_native_hook_accepts_exec_and_quoted_arguments(self):
+        repo = self._repo()
+        self._hook(
+            repo / ".git" / "hooks",
+            'exec "rhizome" \'check\' "资料/a # b.md" "$@" || exit 1 # 校验\n',
+        )
+
+        self.assertTrue(doctor._gate_present(repo)[0])
+
+    @unittest.skipUnless(os.name == "posix", "仅 POSIX 检查 hook 执行权限")
+    def test_nonexecutable_native_hook_is_ignored(self):
+        repo = self._repo()
+        hook = self._hook(repo / ".git" / "hooks")
+        hook.chmod(0o644)
+        self.assertFalse(doctor._gate_present(repo)[0])
+
+        hook.chmod(0o755)
+        self.assertTrue(doctor._gate_present(repo)[0])
+
+    def test_git_errors_preserve_existing_configuration(self):
+        repo = self.tmp / "非 Git 资料"
+        repo.mkdir()
+        config = repo / "lefthook.yml"
+        errors = (
+            FileNotFoundError("git"),
+            subprocess.TimeoutExpired("git", 5),
+            subprocess.CalledProcessError(128, "git"),
+        )
+        for error in errors:
+            with (
+                self.subTest(error=type(error).__name__),
+                patch("subprocess.run", side_effect=error),
+            ):
+                self.assertFalse(doctor._gate_present(repo)[0])
+                config.write_text(_LEFTHOOK_OK, encoding="utf-8")
+                self.assertTrue(doctor._gate_present(repo)[0])
+                config.unlink()
+
+
+from rhizome import adopt  # noqa: E402
+
+
+class TestDoctorSelf(unittest.TestCase):
+    """doctor --self: tool-chain gate template/probe self-consistency (B-class).
+
+    The core regression is test_template_rename_break_fails: monkeypatch the
+    LEFTHOOK_YML template back to the dead `kb check` name (the kb→rhizome
+    rename bug) and assert --self FAILs — proving it catches a rename at the
+    template, which no source-repo scan can see.
+    """
+
+    def setUp(self):
+        self._orig_template = adopt.LEFTHOOK_YML
+        self._orig_gate_cmd = adopt._GATE_COMMAND
+
+    def tearDown(self):
+        adopt.LEFTHOOK_YML = self._orig_template
+        adopt._GATE_COMMAND = self._orig_gate_cmd
+
+    # ---- happy path (current, fixed state) ----------------------------------
+
+    def test_self_passes_in_fixed_state(self):
+        report = doctor.run_self_check(which=_which)
+        self.assertTrue(report["ok"])
+        self.assertEqual({c["status"] for c in report["checks"]}, {doctor.PASS})
+        names = {c["check"] for c in report["checks"]}
+        self.assertEqual(
+            names,
+            {
+                "template-parses",
+                "template-resolvable",
+                "template-probe-agree",
+                "no-legacy-names",
+            },
+        )
+
+    def test_self_detail_names_parsed_command(self):
+        report = doctor.run_self_check(which=_which)
+        parses = next(c for c in report["checks"] if c["check"] == "template-parses")
+        self.assertIn("rhizome", parses["detail"])
+
+    # ---- the core regression: a renamed/broken template must FAIL -----------
+
+    def test_template_rename_break_fails(self):
+        # Revert the template to the dead `kb check` name — the exact rename bug
+        # (template + probe were both `kb`, "consistently wrong"). The retired
+        # `kb` command is not on PATH, so the freshly-adopted hook would exit 127.
+        adopt.LEFTHOOK_YML = self._orig_template.replace("rhizome check", "kb check")
+
+        def which_no_kb(name):  # `kb` retired off PATH, everything else resolves
+            return None if name == "kb" else f"/fake/bin/{name}"
+
+        report = doctor.run_self_check(which=which_no_kb)
+        self.assertFalse(report["ok"])
+        res = next(c for c in report["checks"] if c["check"] == "template-resolvable")
+        self.assertEqual(res["status"], doctor.FAIL)
+        self.assertIn("kb", res["detail"])
+        self.assertIn("127", res["detail"])
+        # The same broken template also trips the probe-agreement + legacy-name
+        # checks, so it FAILs even if the dead command happened to stay on PATH.
+        agree = next(
+            c for c in report["checks"] if c["check"] == "template-probe-agree"
+        )
+        legacy = next(c for c in report["checks"] if c["check"] == "no-legacy-names")
+        self.assertEqual(agree["status"], doctor.FAIL)
+        self.assertEqual(legacy["status"], doctor.FAIL)
+
+    def test_template_unresolvable_command_fails(self):
+        # which(rhizome)=None: even with the right name, an unresolvable command
+        # is a fail — this is the literal rename-break judge (PATH on the box).
+        report = doctor.run_self_check(which=_which_no_rhizome)
+        self.assertFalse(report["ok"])
+        res = next(c for c in report["checks"] if c["check"] == "template-resolvable")
+        self.assertEqual(res["status"], doctor.FAIL)
+        self.assertIn("rhizome", res["detail"])
+
+    def test_template_probe_disagree_fails(self):
+        # Half-done rename: template updated to a new name, probe constant not.
+        # Even though the new command resolves, template ⇔ probe must agree.
+        adopt.LEFTHOOK_YML = self._orig_template.replace(
+            "rhizome check", "rhizome2 check"
+        )
+        report = doctor.run_self_check(which=_which)  # everything "resolves"
+        self.assertFalse(report["ok"])
+        agree = next(
+            c for c in report["checks"] if c["check"] == "template-probe-agree"
+        )
+        self.assertEqual(agree["status"], doctor.FAIL)
+        self.assertIn("disagree", agree["detail"])
+
+    def test_legacy_name_in_template_fails(self):
+        adopt.LEFTHOOK_YML = self._orig_template.replace("rhizome check", "kb check")
+        report = doctor.run_self_check(
+            which=_which
+        )  # kb "resolves" so isolate this check
+        legacy = next(c for c in report["checks"] if c["check"] == "no-legacy-names")
+        self.assertEqual(legacy["status"], doctor.FAIL)
+        self.assertIn("kb", legacy["detail"])
+
+    def test_commented_run_line_is_not_a_gate(self):
+        # A commented `run:` line ships no command — the parser must ignore it.
+        cmds = doctor._template_gate_commands(
+            "pre-commit:\n  commands:\n    kb-check:\n      # run: kb check\n      run: rhizome check\n"
+        )
+        self.assertEqual(cmds, ["rhizome"])
+
+    # ---- CLI wiring ---------------------------------------------------------
+
+    def test_cli_self_exit_zero_in_fixed_state(self):
+        with (
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            rc = main(["doctor", "--self"])
+        self.assertEqual(rc, 0)
+
+    def test_cli_self_exit_nonzero_on_broken_template(self):
+        # Revert to the dead `kb check` name: even if `rhizome` happens to be on
+        # the test process PATH, the bug still surfaces via template-probe-agree
+        # and no-legacy-names, so --self FAILs regardless of PATH.
+        adopt.LEFTHOOK_YML = self._orig_template.replace("rhizome check", "kb check")
+        err = io.StringIO()
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            rc = main(["doctor", "--self"])
+        self.assertEqual(rc, 1)
+        self.assertIn("FAIL", err.getvalue())
+
+    def test_cli_self_json_shape(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = main(["doctor", "--self", "--json"])
+        self.assertEqual(rc, 0)
+        report = json.loads(out.getvalue())
+        self.assertTrue(report["ok"])
+        self.assertEqual(
+            {c["check"] for c in report["checks"]},
+            {
+                "template-parses",
+                "template-resolvable",
+                "template-probe-agree",
+                "no-legacy-names",
+            },
+        )
+
+    def test_cli_all_runs_both_modes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ws = Path(tmp) / "ws"
+            ws.mkdir()
+            reg = Path(tmp) / "kb-sources.toml"
+            reg.write_text(
+                f"workspace_root = {json.dumps(str(ws), ensure_ascii=False)}\n",
+                encoding="utf-8",
+            )
+            repo = ws / "alpha"
+            repo.mkdir()
+            (repo / "lefthook.yml").write_text(_LEFTHOOK_OK, encoding="utf-8")
+            d = repo / "docs"
+            d.mkdir()
+            (d / "INDEX.md").write_text(_INDEX, encoding="utf-8")
+            reg.write_text(
+                reg.read_text(encoding="utf-8") + '\n[[source]]\nname = "alpha"\n',
+                encoding="utf-8",
+            )
+            os.environ["KB_SOURCES"] = str(reg)
+            try:
+                out = io.StringIO()
+                with (
+                    contextlib.redirect_stdout(out),
+                    contextlib.redirect_stderr(io.StringIO()),
+                ):
+                    rc = main(["doctor", "--all", "--json"])
+                self.assertEqual(rc, 0)
+                payload = json.loads(out.getvalue())
+                self.assertIn("sources", payload)
+                self.assertIn("self", payload)
+                self.assertTrue(payload["ok"])
+            finally:
+                os.environ.pop("KB_SOURCES", None)
+
+    def test_cli_requires_a_mode(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = main(["doctor"])
+        self.assertEqual(rc, 2)
+        self.assertIn("--self", err.getvalue())
+        self.assertIn("--sources", err.getvalue())
+
+
+if __name__ == "__main__":
+    unittest.main()

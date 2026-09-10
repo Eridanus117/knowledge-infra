@@ -1,0 +1,66 @@
+[project]
+name = "rhizome"
+version = "0.1.4"
+description = "Rhizome — decentralized KB authoring and validation CLI (frontmatter contract + domain tree)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Eridanus" }]
+requires-python = ">=3.12"
+dependencies = [
+    "gnomon",
+]
+
+[project.scripts]
+rhizome = "rhizome.cli:run"
+
+# gnomon = shared per-invocation SQLite telemetry core for source-gamma tools.
+# Pin a public GitHub commit so clean-room CI does not depend on local tags.
+[tool.uv.sources]
+gnomon = { git = "https://github.com/source-gamma/gnomon.git", rev = "1e949bcd22cdfd1f2459dbf43b7f6f03ab31d781" }
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rhizome"]
+
+[dependency-groups]
+# ruff/pyrefly are installed through uvx in local checks and the shared CI,
+# keeping the project environment focused on runtime/test dependencies.
+dev = [
+    "pytest>=9.1.1",
+    "poethepoet",
+]
+freeze = ["pyinstaller>=6.22.2,<7"]
+
+[tool.poe.tasks]
+lint = "uvx ruff@0.15.16 check ."
+fmt = "uvx ruff@0.15.16 format ."
+typecheck = "uv run --with pyrefly==1.0.0 pyrefly check"
+test = "pytest"
+check = { sequence = ["lint", "typecheck", "test"], help = "lint + typecheck + test" }
+freeze = { cmd = "./scripts/build-release.sh", help = "build the self-contained rhizome release binary" }
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+# TRY003: this CLI deliberately raises domain exceptions (SourcesError,
+#   ContractError, AdoptError) with f-string diagnostics at the raise site;
+#   one subclass per message would be strictly worse.
+extend-ignore = ["TRY003"]
+
+[tool.ruff.lint.extend-per-file-ignores]
+# ARG: test doubles mirror real signatures without using all params — normal pytest idiom.
+"tests/**" = ["ARG"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
