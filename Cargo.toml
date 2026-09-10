@@ -1,0 +1,14 @@
+[workspace]
+members = ["crates/kb-contract", "crates/rhizome-core", "bins/rhizome"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+clap = { version = "=4.6.6", default-features = false, features = ["std", "help", "usage", "error-context"] }
+kb-contract = { path = "crates/kb-contract" }
+rhizome-core = { path = "crates/rhizome-core" }

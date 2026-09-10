@@ -1,0 +1,11 @@
+[package]
+name = "rhizome"
+description = "Command-line interface for Git-backed Markdown knowledge sources"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+clap.workspace = true
+rhizome-core.workspace = true

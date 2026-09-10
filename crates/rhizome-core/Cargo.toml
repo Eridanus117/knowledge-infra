@@ -1,0 +1,10 @@
+[package]
+name = "rhizome-core"
+description = "Source-plane operations for Git-backed Markdown knowledge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+kb-contract.workspace = true
