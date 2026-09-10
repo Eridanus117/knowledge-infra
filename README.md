@@ -9,7 +9,7 @@ Markdown files and Git history remain the authoritative source; generated indexe
 - `rhizome-core` exposes validated source-root and normalized relative-path boundaries for source-plane operations.
 - `rhizome` is the command-line entry point.
 
-The complete public histories of the predecessor Rhizome and Memex repositories are retained under `legacy/rhizome` and `legacy/memex` respectively. No Memex Rust package or vector/search backend is part of this bootstrap.
+The complete histories of the predecessor Rhizome and Memex repositories are retained under `legacy/rhizome` and `legacy/memex` respectively. No Memex Rust package or vector/search backend is part of this bootstrap.
 
 ## Toolchain
 
