@@ -1,0 +1,11 @@
+[[source]]
+name = "zulu"
+path = "roots/a-root"
+
+[[source]]
+name = "alpha"
+path = "roots/z-root"
+
+[[source]]
+name = "middle"
+path = "roots/m-root"

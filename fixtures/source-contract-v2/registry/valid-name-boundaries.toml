@@ -1,0 +1,13 @@
+workspace_root = "roots"
+
+[[source]]
+name = "a0-b9"
+
+[[source]]
+name = "a--b"
+
+[[source]]
+name = "a-"
+
+[[source]]
+name = "a"

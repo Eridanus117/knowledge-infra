@@ -1,0 +1,7 @@
+[[source]]
+name = "alpha"
+path = "roots/alpha"
+
+[[source]]
+name = "beta"
+path = "roots/beta"

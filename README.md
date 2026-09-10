@@ -5,8 +5,8 @@ Markdown files and Git history remain the authoritative source; generated indexe
 
 ## Workspace
 
-- `kb-contract` defines source-format boundary errors and will own the versioned source contract.
-- `rhizome-core` exposes validated source-root and normalized relative-path boundaries for source-plane operations.
+- `kb-contract` owns the strict `source-contract-v2` registry values and versioned diagnostics.
+- `rhizome-core` exposes validated source-root and normalized relative-path boundaries using those diagnostics.
 - `rhizome` is the command-line entry point.
 
 The complete histories of the predecessor Rhizome and Memex repositories are retained under `legacy/rhizome` and `legacy/memex` respectively. No Memex Rust package or vector/search backend is part of this bootstrap.

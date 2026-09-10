@@ -1,0 +1,7 @@
+[[source]]
+name = "alpha"
+path = "roots/shared"
+
+[[source]]
+name = "beta"
+path = "roots/shared/../shared"

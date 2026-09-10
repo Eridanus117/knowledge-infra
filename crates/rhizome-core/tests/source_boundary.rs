@@ -51,8 +51,8 @@ fn source_root_rejects_a_relative_path() {
 
     let error = SourceRoot::new(&path).expect_err("relative root should be rejected");
 
-    assert_eq!(error.code(), "source.root.relative");
-    assert_eq!(error.path(), Some(path.as_path()));
+    assert_eq!(error.code, "KBV2-SOURCE-ROOT-RELATIVE");
+    assert_eq!(error.path.as_deref(), Some(path.as_path()));
 }
 
 #[test]
@@ -62,8 +62,8 @@ fn source_root_rejects_a_missing_directory() {
 
     let error = SourceRoot::new(&path).expect_err("missing root should be rejected");
 
-    assert_eq!(error.code(), "source.root.missing");
-    assert_eq!(error.path(), Some(path.as_path()));
+    assert_eq!(error.code, "KBV2-SOURCE-ROOT-MISSING");
+    assert_eq!(error.path.as_deref(), Some(path.as_path()));
 }
 
 #[test]
@@ -74,8 +74,8 @@ fn source_root_rejects_a_file() {
 
     let error = SourceRoot::new(&path).expect_err("file root should be rejected");
 
-    assert_eq!(error.code(), "source.root.not_directory");
-    assert_eq!(error.path(), Some(path.as_path()));
+    assert_eq!(error.code, "KBV2-SOURCE-ROOT-NOT-DIRECTORY");
+    assert_eq!(error.path.as_deref(), Some(path.as_path()));
 }
 
 #[test]
@@ -100,7 +100,11 @@ fn source_path_rejects_non_relative_components() {
 
     for path in invalid_paths {
         let error = SourcePath::new(&path).expect_err("invalid source path should be rejected");
-        assert_eq!(error.code(), "source.path.invalid", "path: {path:?}");
-        assert_eq!(error.path(), Some(path.as_path()), "path: {path:?}");
+        assert_eq!(error.code, "KBV2-SOURCE-PATH-INVALID", "path: {path:?}");
+        assert_eq!(
+            error.path.as_deref(),
+            Some(path.as_path()),
+            "path: {path:?}"
+        );
     }
 }

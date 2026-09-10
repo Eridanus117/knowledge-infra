@@ -1,4 +1,4 @@
-use kb_contract::ContractError;
+use kb_contract::Diagnostic;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
@@ -10,17 +10,17 @@ use std::path::{Component, Path, PathBuf};
 pub struct SourceRoot(PathBuf);
 
 impl SourceRoot {
-    pub fn new(path: impl Into<PathBuf>) -> Result<Self, ContractError> {
+    pub fn new(path: impl Into<PathBuf>) -> Result<Self, Diagnostic> {
         let path = path.into();
         if path.as_os_str().is_empty() {
-            return Err(ContractError::new(
-                "source.root.empty",
+            return Err(Diagnostic::error(
+                "KBV2-SOURCE-ROOT-EMPTY",
                 "source root must not be empty",
             ));
         }
         if !path.is_absolute() {
-            return Err(ContractError::new(
-                "source.root.relative",
+            return Err(Diagnostic::error(
+                "KBV2-SOURCE-ROOT-RELATIVE",
                 "source root must be absolute",
             )
             .at_path(path));
@@ -28,20 +28,20 @@ impl SourceRoot {
 
         let metadata = fs::metadata(&path).map_err(|source| {
             let (code, description) = if source.kind() == ErrorKind::NotFound {
-                ("source.root.missing", "source root does not exist")
+                ("KBV2-SOURCE-ROOT-MISSING", "source root does not exist")
             } else {
-                ("source.root.unavailable", "source root is not accessible")
+                (
+                    "KBV2-SOURCE-ROOT-UNAVAILABLE",
+                    "source root is not accessible",
+                )
             };
-            ContractError::new(
-                code,
-                format!("{description}: {}: {source}", path.display()),
-            )
-            .at_path(path.clone())
+            Diagnostic::error(code, format!("{description}: {}: {source}", path.display()))
+                .at_path(path.clone())
         })?;
 
         if !metadata.is_dir() {
-            return Err(ContractError::new(
-                "source.root.not_directory",
+            return Err(Diagnostic::error(
+                "KBV2-SOURCE-ROOT-NOT-DIRECTORY",
                 format!("source root is not a directory: {}", path.display()),
             )
             .at_path(path));
@@ -62,7 +62,7 @@ impl SourceRoot {
 pub struct SourcePath(PathBuf);
 
 impl SourcePath {
-    pub fn new(path: impl Into<PathBuf>) -> Result<Self, ContractError> {
+    pub fn new(path: impl Into<PathBuf>) -> Result<Self, Diagnostic> {
         let path = path.into();
         let mut normalized = PathBuf::new();
 
@@ -89,9 +89,9 @@ impl SourcePath {
     }
 }
 
-fn invalid_source_path(path: PathBuf) -> ContractError {
-    ContractError::new(
-        "source.path.invalid",
+fn invalid_source_path(path: PathBuf) -> Diagnostic {
+    Diagnostic::error(
+        "KBV2-SOURCE-PATH-INVALID",
         "source path must contain only normalized relative components",
     )
     .at_path(path)

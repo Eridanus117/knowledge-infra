@@ -1,24 +1,30 @@
 use std::error::Error;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-/// A structured failure at the source-contract boundary.
-///
-/// Codes are stable machine identifiers. Paths and fields remain optional so
-/// configuration-wide failures can use the same transport as note failures.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ContractError {
-    code: &'static str,
-    path: Option<PathBuf>,
-    field: Option<String>,
-    message: String,
+/// Machine-readable severity carried by a source-contract diagnostic.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Severity {
+    Error,
+    Warning,
 }
 
-impl ContractError {
+/// A stable diagnostic at the source-contract boundary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Diagnostic {
+    pub code: &'static str,
+    pub severity: Severity,
+    pub path: Option<PathBuf>,
+    pub field: Option<String>,
+    pub message: String,
+}
+
+impl Diagnostic {
     #[must_use]
-    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub fn error(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             code,
+            severity: Severity::Error,
             path: None,
             field: None,
             message: message.into(),
@@ -36,32 +42,12 @@ impl ContractError {
         self.field = Some(field.into());
         self
     }
-
-    #[must_use]
-    pub const fn code(&self) -> &'static str {
-        self.code
-    }
-
-    #[must_use]
-    pub fn path(&self) -> Option<&Path> {
-        self.path.as_deref()
-    }
-
-    #[must_use]
-    pub fn field(&self) -> Option<&str> {
-        self.field.as_deref()
-    }
-
-    #[must_use]
-    pub fn message(&self) -> &str {
-        &self.message
-    }
 }
 
-impl fmt::Display for ContractError {
+impl fmt::Display for Diagnostic {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.message)
     }
 }
 
-impl Error for ContractError {}
+impl Error for Diagnostic {}

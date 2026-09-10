@@ -1,0 +1,14 @@
+workspace_root = "workspace"
+
+[[source]]
+name = "defaulted"
+
+[[source]]
+name = "custom"
+path = "repos/alias/../custom-root"
+surface = "core"
+
+[[source]]
+name = "vertical"
+path = "repos/vertical-root"
+surface = "vertical"

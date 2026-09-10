@@ -1,0 +1,5 @@
+workspace_root = "workspace"
+
+[[source]]
+name = "alpha"
+surface = "core"

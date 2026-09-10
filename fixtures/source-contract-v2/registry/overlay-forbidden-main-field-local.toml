@@ -1,0 +1,5 @@
+workspace_root = "forbidden"
+
+[[source]]
+name = "alpha"
+path = "local/alpha"

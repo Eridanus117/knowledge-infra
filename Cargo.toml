@@ -11,4 +11,6 @@ license = "MIT"
 [workspace.dependencies]
 clap = { version = "=4.6.6", default-features = false, features = ["std", "help", "usage", "error-context"] }
 kb-contract = { path = "crates/kb-contract" }
+libc = "=0.2.177"
 rhizome-core = { path = "crates/rhizome-core" }
+toml = { version = "=0.9.8", default-features = false, features = ["parse", "serde"] }

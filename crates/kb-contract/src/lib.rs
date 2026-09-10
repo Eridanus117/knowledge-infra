@@ -3,8 +3,10 @@
 //! Shared value and error boundaries for knowledge-source contracts.
 
 pub mod error;
+pub mod registry;
 
-pub use error::ContractError;
+pub use error::{Diagnostic, Severity};
+pub use registry::{Registry, RegistryLocator, SourceName, SourceSpec, Surface, resolve_registry};
 
 /// Schema identifier carried by source-contract diagnostics and artifacts.
 pub const SOURCE_CONTRACT_SCHEMA: &str = "source-contract-v2";

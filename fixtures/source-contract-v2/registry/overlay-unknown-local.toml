@@ -1,0 +1,3 @@
+[[source]]
+name = "ghost"
+path = "local/ghost"

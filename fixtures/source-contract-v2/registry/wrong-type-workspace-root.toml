@@ -1,0 +1,5 @@
+workspace_root = 17
+
+[[source]]
+name = "alpha"
+path = "root"

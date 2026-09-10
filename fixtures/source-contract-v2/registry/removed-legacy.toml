@@ -1,0 +1,4 @@
+[[source]]
+name = "alpha"
+path = "root"
+legacy = true
