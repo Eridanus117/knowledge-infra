@@ -1,10 +1,12 @@
-use crate::CoreError;
 use kb_contract::ContractError;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 
-/// An absolute filesystem boundary containing one logical knowledge source.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// An absolute path that was an existing directory when the value was created.
+///
+/// `SourceRoot` records source identity; filesystem access is outside its contract.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct SourceRoot(PathBuf);
 
 impl SourceRoot {
@@ -23,38 +25,24 @@ impl SourceRoot {
             )
             .at_path(path));
         }
-        Ok(Self(path))
-    }
 
-    #[must_use]
-    pub fn as_path(&self) -> &Path {
-        &self.0
-    }
-}
+        let metadata = fs::metadata(&path).map_err(|source| {
+            let (code, description) = if source.kind() == ErrorKind::NotFound {
+                ("source.root.missing", "source root does not exist")
+            } else {
+                ("source.root.unavailable", "source root is not accessible")
+            };
+            ContractError::new(
+                code,
+                format!("{description}: {}: {source}", path.display()),
+            )
+            .at_path(path.clone())
+        })?;
 
-/// A normalized path relative to a [`SourceRoot`].
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct SourcePath(PathBuf);
-
-impl SourcePath {
-    pub fn new(path: impl Into<PathBuf>) -> Result<Self, ContractError> {
-        let path = path.into();
-        let invalid = path.as_os_str().is_empty()
-            || path.is_absolute()
-            || path.components().any(|component| {
-                matches!(
-                    component,
-                    Component::Prefix(_)
-                        | Component::RootDir
-                        | Component::ParentDir
-                        | Component::CurDir
-                )
-            });
-
-        if invalid {
+        if !metadata.is_dir() {
             return Err(ContractError::new(
-                "source.path.invalid",
-                "source path must be a non-empty normalized relative path",
+                "source.root.not_directory",
+                format!("source root is not a directory: {}", path.display()),
             )
             .at_path(path));
         }
@@ -68,32 +56,43 @@ impl SourcePath {
     }
 }
 
-/// Byte-preserving source access used by contract and Git-aware operations.
-pub trait SourceReader {
-    fn read(&self, root: &SourceRoot, path: &SourcePath) -> Result<Vec<u8>, CoreError>;
-}
+/// A non-empty, normalized sequence of path components relative to a source.
+/// This value is a lexical source identifier.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct SourcePath(PathBuf);
 
-/// Filesystem implementation that rejects symlink escapes from the source root.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct FileSystemSourceReader;
+impl SourcePath {
+    pub fn new(path: impl Into<PathBuf>) -> Result<Self, ContractError> {
+        let path = path.into();
+        let mut normalized = PathBuf::new();
 
-impl SourceReader for FileSystemSourceReader {
-    fn read(&self, root: &SourceRoot, path: &SourcePath) -> Result<Vec<u8>, CoreError> {
-        let canonical_root = fs::canonicalize(root.as_path())
-            .map_err(|error| CoreError::io("resolve", root.as_path(), error))?;
-        let requested = root.as_path().join(path.as_path());
-        let canonical_path = fs::canonicalize(&requested)
-            .map_err(|error| CoreError::io("resolve", &requested, error))?;
-
-        if !canonical_path.starts_with(&canonical_root) {
-            return Err(ContractError::new(
-                "source.path.escape",
-                "source path resolves outside its source root",
-            )
-            .at_path(requested)
-            .into());
+        for component in path.components() {
+            match component {
+                Component::Normal(segment) => normalized.push(segment),
+                Component::Prefix(_)
+                | Component::RootDir
+                | Component::ParentDir
+                | Component::CurDir => return Err(invalid_source_path(path.clone())),
+            }
         }
 
-        fs::read(&canonical_path).map_err(|error| CoreError::io("read", &canonical_path, error))
+        if normalized.as_os_str().is_empty() {
+            return Err(invalid_source_path(path));
+        }
+
+        Ok(Self(normalized))
     }
+
+    #[must_use]
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
+fn invalid_source_path(path: PathBuf) -> ContractError {
+    ContractError::new(
+        "source.path.invalid",
+        "source path must contain only normalized relative components",
+    )
+    .at_path(path)
 }

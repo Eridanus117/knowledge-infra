@@ -2,7 +2,7 @@ use kb_contract::ContractError;
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Failures produced while operating on a knowledge source.
 #[derive(Debug)]
@@ -13,16 +13,6 @@ pub enum CoreError {
         path: PathBuf,
         source: io::Error,
     },
-}
-
-impl CoreError {
-    pub(crate) fn io(operation: &'static str, path: &Path, source: io::Error) -> Self {
-        Self::Io {
-            operation,
-            path: path.to_path_buf(),
-            source,
-        }
-    }
 }
 
 impl fmt::Display for CoreError {

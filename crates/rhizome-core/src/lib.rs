@@ -6,4 +6,4 @@ pub mod error;
 pub mod source;
 
 pub use error::CoreError;
-pub use source::{FileSystemSourceReader, SourcePath, SourceReader, SourceRoot};
+pub use source::{SourcePath, SourceRoot};
