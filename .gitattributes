@@ -1,4 +1,5 @@
 * text=auto eol=lf
+fixtures/source-contract-v2/frontmatter/valid-crlf.md -text
 
 *.png binary
 *.jpg binary
