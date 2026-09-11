@@ -162,18 +162,96 @@ Field notation is also versioned:
 
 The classification of `legacy` takes precedence over generic unknown-field or overlay-field classification. Its code and exact message are always the removed-field contract above.
 
-## Shared source-path diagnostics
+## Domain, identity, and source discovery
 
-The existing `SourceRoot` and `SourcePath` boundaries also return `Diagnostic` directly. Their acceptance and path-normalization behavior is unchanged; their machine codes are versioned for v2. These diagnostics have `severity: Severity::Error` and no `field`.
+The opaque logical values and source snapshot boundary are:
 
-| Code | Condition |
-|---|---|
-| `KBV2-SOURCE-ROOT-EMPTY` | The source-root input is empty. |
-| `KBV2-SOURCE-ROOT-RELATIVE` | The source-root input is not absolute. |
-| `KBV2-SOURCE-ROOT-MISSING` | The absolute source root does not exist. |
-| `KBV2-SOURCE-ROOT-UNAVAILABLE` | Metadata for the absolute source root cannot be read for another reason. |
-| `KBV2-SOURCE-ROOT-NOT-DIRECTORY` | The absolute source root is not a directory. |
-| `KBV2-SOURCE-PATH-INVALID` | A source-relative path is empty, absolute, or contains `.`, `..`, a root, or a platform prefix. |
+```rust
+pub struct DomainId(String);
+pub struct Identity(String);
+
+pub struct SourceContext {
+    pub source: SourceSpec,
+    pub git_root: PathBuf,
+    pub registry_origin: PathBuf,
+}
+
+pub struct DomainNode {
+    pub id: DomainId,
+    pub physical_dir: PathBuf,
+    pub index_path: PathBuf,
+}
+
+pub struct NoteLocator {
+    pub identity: Identity,
+    pub domain: DomainId,
+    pub slug: String,
+    pub path: PathBuf,
+    pub is_domain_index: bool,
+}
+
+pub struct SnapshotNote {
+    pub locator: NoteLocator,
+    pub note: ValidatedNote,
+}
+
+pub struct SourceSnapshot {
+    pub source: SourceName,
+    pub domains: Vec<DomainNode>,
+    pub notes: Vec<SnapshotNote>,
+}
+
+pub fn derive_identity(
+    source: &SourceName,
+    domain: &DomainId,
+    slug: &str,
+) -> Result<Identity, Diagnostic>;
+
+pub fn discover_source(
+    context: &SourceContext,
+) -> Result<SourceSnapshot, Vec<Diagnostic>>;
+```
+
+`SourceName`, `DomainId`, and `Identity` expose `as_str`, implement `Display`, and implement `Borrow<str>` for borrowed lookup. `DomainId::new` is the only public direct constructor added here. `Identity` is derive-only; there is no unchecked constructor.
+
+### C2 domains and logical identities
+
+A `DomainId` is one or more non-empty `/`-separated Unicode segments. An exact segment `.` or `..`, `:`, `\`, or any Unicode control character is invalid. Each accepted segment is normalized to NFC and joined with `/`; that NFC spelling is retained for display.
+
+A domain exists only at a non-root directory containing a regular file whose directory-entry name is exactly uppercase `INDEX.md`. Its C2 ID is the `/`-joined sequence of NFC-normalized basenames of only those non-root ancestors that also contain exact `INDEX.md`. Physical ancestors without such a file do not contribute a segment. A source-root `INDEX.md` creates neither an empty domain nor a note and is not parsed.
+
+An ordinary note belongs to its nearest ancestor domain. Its slug is only its filename stem, normalized to NFC. Non-domain subdirectories never enter the slug or identity. A slug is exactly one non-empty segment: `.`, `..`, `/`, `\`, `:`, and Unicode control characters are invalid. Dots inside a longer filename stem are valid.
+
+An identity is exactly `<logical-source>:<C2-domain>:<NFC-filename-stem>`. The first component is `SourceSpec.name`; a Git-root basename, source-root basename, checkout name, and worktree name never contribute. Moving a source root or its containing Git root therefore leaves identities unchanged. Moving a note to a different domain or changing its filename stem changes its identity.
+
+Collision keys are computed from the NFC display value with locale-independent full Unicode case folding, not lowercase conversion or simple case folding. Display values remain NFC and are not replaced by folded keys. Two physical domain directories with the same folded C2 key are a domain collision. Two in-domain notes with the same folded full identity are an identity collision, including equal filename stems below different non-domain physical subdirectories.
+
+### Bounded source walk
+
+`SourceContext.git_root` must canonicalize to an existing directory with an exact `.git` entry that is a file or directory. `SourceSpec.root` is canonicalized again at discovery and may equal the Git root or be strictly below it; canonical containment is required. A lexical child that resolves outside through a source-root symlink is outside the Git root.
+
+Discovery is iterative and bounded by the canonical source root. It never traverses a directory symlink. Before reading directory contents below an entry, it prunes `.git`, `.obsidian`, every dot-prefixed directory, `.venv`, `.legacy-index`, `node_modules`, `target`, and `dist`.
+
+Only exact lowercase-extension `.md` regular files are note candidates. Markdown outside every domain is ignored without reading or frontmatter parsing. Every non-root exact `INDEX.md` is parsed and validated, must declare `kind: index`, and appears exactly once in `SourceSnapshot.notes` with `is_domain_index: true` and slug `INDEX`. Ordinary in-domain notes have `is_domain_index: false`.
+
+`SourceSnapshot.domains` is ordered by `DomainId` and then source-relative physical path. `SourceSnapshot.notes` is ordered by domain and then source-relative physical path. Filesystem enumeration order, physical Git-root name, and registry row order do not affect the result. Discovery returns the complete snapshot or diagnostics, never a partial snapshot.
+
+### Domain, identity, and discovery diagnostics
+
+Every diagnostic below has `severity: Severity::Error`. Messages are exact and never append parser output, OS errors, private paths, source names, or offending text. Collision failures produce one diagnostic at each colliding structural path; for a two-path collision this is exactly two diagnostics ordered by folded logical key and then source-relative path.
+
+| Code | Condition | `path` | `field` | Exact `message` |
+|---|---|---|---|---|
+| `KBV2-DOMAIN-INVALID` | direct domain input has an invalid segment | none | `domain` | `domain must contain only safe non-empty path segments` |
+| `KBV2-DOMAIN-INVALID` | an INDEX-owning basename cannot form a domain segment | affected `INDEX.md` | `domain` | `domain must contain only safe non-empty path segments` |
+| `KBV2-IDENTITY-INVALID-SLUG` | direct filename-stem slug input is invalid | none | `slug` | `note slug must be one safe non-empty path segment` |
+| `KBV2-IDENTITY-INVALID-SLUG` | an in-domain filename stem is invalid | affected note | `slug` | `note slug must be one safe non-empty path segment` |
+| `KBV2-IDENTITY-COLLISION` | two or more notes share one NFC plus full-casefold identity key | each colliding note | none | `note identity is duplicated` |
+| `KBV2-SOURCE-GIT-ROOT` | Git root is missing, not a directory, unreadable, or has no exact file/directory `.git` entry | attempted Git root | none | `Git root must be an existing directory containing .git` |
+| `KBV2-SOURCE-OUTSIDE-GIT` | canonical source root is outside canonical Git root | canonical source root | none | `source root must be contained by the Git root` |
+| `KBV2-SOURCE-READ` | source root, eligible directory entry, domain landing, or in-domain note cannot be read | affected path | none | `source entry could not be read` |
+| `KBV2-SOURCE-DUPLICATE-DOMAIN` | two or more INDEX-owning directories share one NFC plus full-casefold C2 key | each colliding `INDEX.md` | none | `domain is duplicated` |
+| `KBV2-SOURCE-INDEX-KIND` | a non-root exact `INDEX.md` validates with a kind other than `index` | affected `INDEX.md` | `kind` | ``domain INDEX.md must declare kind `index``` |
 
 ## Removed v1 behavior
 

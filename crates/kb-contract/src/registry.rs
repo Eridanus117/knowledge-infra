@@ -1,5 +1,7 @@
 use crate::Diagnostic;
+use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read};
 #[cfg(unix)]
@@ -39,6 +41,25 @@ const OVERLAY_FIELD_MESSAGE: &str = "local overlay may override only source.path
 /// Stable logical name for a registered knowledge source.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SourceName(String);
+
+impl SourceName {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Borrow<str> for SourceName {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for SourceName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
 
 /// Human-facing placement of a source in the knowledge surface.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

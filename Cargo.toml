@@ -14,3 +14,5 @@ kb-contract = { path = "crates/kb-contract" }
 libc = "=0.2.177"
 rhizome-core = { path = "crates/rhizome-core" }
 toml = { version = "=0.9.8", default-features = false, features = ["parse", "serde"] }
+unicode-casefold = "=0.2.0"
+unicode-normalization = "=0.1.25"

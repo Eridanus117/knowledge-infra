@@ -8,3 +8,5 @@ license.workspace = true
 
 [dependencies]
 kb-contract.workspace = true
+unicode-casefold.workspace = true
+unicode-normalization.workspace = true
