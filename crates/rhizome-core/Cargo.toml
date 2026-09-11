@@ -13,6 +13,7 @@ focaccia.workspace = true
 kb-contract.workspace = true
 unicode-normalization.workspace = true
 sha2.workspace = true
+serde_json.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

@@ -1,6 +1,8 @@
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::ambient_authority;
 #[cfg(unix)]
+use cap_std::fs::MetadataExt;
+#[cfg(unix)]
 use cap_std::fs::OpenOptionsExt;
 use cap_std::fs::{Dir, File, OpenOptions};
 use focaccia::CaseFold;
@@ -10,7 +12,7 @@ use kb_contract::{
 };
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 #[cfg(windows)]
 use std::path::Prefix;
 use std::path::{Component, Path, PathBuf};
@@ -246,6 +248,7 @@ fn open_regular_file_nofollow(parent: &Dir, name: &OsStr) -> io::Result<(File, u
     let file = parent.open_with(Path::new(name), &options)?;
     let metadata = file.metadata()?;
     if metadata.is_file() {
+        require_single_link(&file)?;
         Ok((file, metadata.len()))
     } else {
         Err(io::ErrorKind::InvalidData.into())
@@ -260,15 +263,116 @@ pub(crate) fn open_regular_file_for_update_nofollow(
     options.read(true).write(true).follow(FollowSymlinks::No);
     #[cfg(unix)]
     options.custom_flags(libc::O_NONBLOCK);
-
     let file = parent.open_with(Path::new(name), &options)?;
     if file.metadata()?.is_file() {
+        require_single_link(&file)?;
+        Ok(file)
+    } else {
+        Err(io::ErrorKind::InvalidData.into())
+    }
+}
+fn require_single_link(file: &File) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        if file.metadata()?.nlink() != 1 {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        return Ok(());
+    }
+    #[cfg(windows)]
+    {
+        let std_file = file.try_clone()?.into_std();
+        let links = winapi_util::file::information(&std_file)?.number_of_links();
+        if links != 1 {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        return Ok(());
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+}
+pub(crate) fn create_regular_file_nofollow(path: &Path) -> io::Result<File> {
+    let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
+    let directory = open_absolute_dir_nofollow(parent)?;
+    let mut options = OpenOptions::new();
+    options
+        .write(true)
+        .create_new(true)
+        .follow(FollowSymlinks::No);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NONBLOCK);
+    let file = directory.open_with(Path::new(name), &options)?;
+    if file.metadata()?.is_file() {
+        require_single_link(&file)?;
         Ok(file)
     } else {
         Err(io::ErrorKind::InvalidData.into())
     }
 }
 
+pub(crate) fn open_regular_file_for_append_nofollow(path: &Path) -> io::Result<File> {
+    let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
+    let directory = open_absolute_dir_nofollow(parent)?;
+    let mut options = OpenOptions::new();
+    options
+        .write(true)
+        .append(true)
+        .create(true)
+        .follow(FollowSymlinks::No);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NONBLOCK);
+    let file = directory.open_with(Path::new(name), &options)?;
+    if file.metadata()?.is_file() {
+        require_single_link(&file)?;
+        Ok(file)
+    } else {
+        Err(io::ErrorKind::InvalidData.into())
+    }
+}
+
+pub(crate) fn write_regular_file_nofollow(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
+    let directory = open_absolute_dir_nofollow(parent)?;
+    let mut file = open_regular_file_for_update_nofollow(&directory, name)?;
+    file.set_len(0)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+pub(crate) fn validate_regular_file_nofollow(path: &Path) -> io::Result<()> {
+    let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
+    let directory = open_absolute_dir_nofollow(parent)?;
+    let _ = open_regular_file_nofollow(&directory, name)?;
+    Ok(())
+}
+
+pub(crate) fn read_regular_file_nofollow_bounded(
+    path: &Path,
+    max_bytes: usize,
+) -> io::Result<Vec<u8>> {
+    let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
+    let directory = open_absolute_dir_nofollow(parent)?;
+    let (mut file, length) = open_regular_file_nofollow(&directory, name)?;
+    if length > max_bytes as u64 {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    let mut bytes = Vec::with_capacity(length as usize);
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+pub(crate) fn remove_file_nofollow(path: &Path) -> io::Result<()> {
+    let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
+    let directory = open_absolute_dir_nofollow(parent)?;
+    directory.remove_file_or_symlink(Path::new(name))
+}
 fn has_exact_git_marker(git_root: &Dir) -> io::Result<bool> {
     for entry in git_root.entries()? {
         let entry = entry?;
