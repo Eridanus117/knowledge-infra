@@ -1,5 +1,6 @@
 use crate::human_index::check_human_index;
 use crate::links::check_links_and_code;
+use crate::mermaid::check_note_mermaid;
 use crate::source::{SourceContext, discover_source};
 use kb_contract::{Diagnostic, SourceName};
 use std::error::Error;
@@ -68,6 +69,9 @@ impl Error for CoreError {}
 pub fn check_source(context: &SourceContext) -> Result<CheckReport, CoreError> {
     let snapshot = discover_source(context).map_err(CoreError::Discovery)?;
     let mut findings = check_links_and_code(&snapshot, context);
+    for note in &snapshot.notes {
+        findings.extend(check_note_mermaid(&note.locator.path, &note.note));
+    }
     let index = context.source.root.join("INDEX.md");
     findings.extend(check_human_index(&snapshot, &index)?);
     Ok(CheckReport {

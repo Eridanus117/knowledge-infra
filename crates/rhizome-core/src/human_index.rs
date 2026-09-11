@@ -1,6 +1,7 @@
 use crate::check::{CoreError, HUMAN_INDEX_DRIFT_CODE, HUMAN_INDEX_MARKER_CODE};
 use crate::source::{
     SourceSnapshot, open_absolute_dir_nofollow, open_regular_file_for_update_nofollow,
+    read_regular_file_nofollow_bounded,
 };
 use kb_contract::Diagnostic;
 use sha2::{Digest, Sha256};
@@ -27,13 +28,15 @@ pub struct HumanIndexPlan {
     target: PathBuf,
 }
 
-pub(crate) fn check_human_index(
+pub fn check_human_index(
     snapshot: &SourceSnapshot,
     index: &Path,
 ) -> Result<Vec<Diagnostic>, CoreError> {
-    let bytes = fs::read(index).map_err(|source| CoreError::Io {
-        path: index.to_path_buf(),
-        source,
+    let bytes = read_regular_file_nofollow_bounded(index, 64 * 1024 * 1024).map_err(|source| {
+        CoreError::Io {
+            path: index.to_path_buf(),
+            source,
+        }
     })?;
     let marker = match marker_region(&bytes) {
         Ok(region) => region,
@@ -57,10 +60,12 @@ pub fn plan_human_index(
     index: &Path,
 ) -> Result<HumanIndexPlan, CoreError> {
     let (canonical_index, source_root) = validate_index_root(snapshot, index)?;
-    let bytes = fs::read(&canonical_index).map_err(|source| CoreError::Io {
-        path: canonical_index.clone(),
-        source,
-    })?;
+    let bytes = read_regular_file_nofollow_bounded(&canonical_index, 64 * 1024 * 1024).map_err(
+        |source| CoreError::Io {
+            path: canonical_index.clone(),
+            source,
+        },
+    )?;
     let region = marker_region(&bytes).map_err(|message| CoreError::HumanIndex {
         path: canonical_index.clone(),
         message,

@@ -9,10 +9,7 @@ const BROKEN_CODE: &str = "KBV2-CODE-BROKEN";
 const BROKEN_LINK_MESSAGE: &str = "link target does not resolve: ";
 const BROKEN_CODE_MESSAGE: &str = "code pointer does not resolve from the Git root";
 
-pub(crate) fn check_links_and_code(
-    snapshot: &SourceSnapshot,
-    context: &SourceContext,
-) -> Vec<Diagnostic> {
+pub fn check_links_and_code(snapshot: &SourceSnapshot, context: &SourceContext) -> Vec<Diagnostic> {
     let identities = snapshot
         .notes
         .iter()

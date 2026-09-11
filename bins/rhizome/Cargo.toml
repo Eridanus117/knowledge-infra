@@ -9,3 +9,8 @@ license.workspace = true
 [dependencies]
 clap.workspace = true
 rhizome-core.workspace = true
+kb-contract.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

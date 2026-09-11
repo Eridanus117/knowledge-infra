@@ -9,7 +9,7 @@ use kb_contract::{
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-
+use unicode_normalization::UnicodeNormalization;
 #[derive(Debug)]
 pub enum RelocateError {
     Git(GitError),
@@ -170,7 +170,9 @@ pub fn plan_relocate(
             "target INDEX.md worktree differs from HEAD".into(),
         ));
     }
-    let slug = target_slug.unwrap_or_else(|| source_note.locator.slug.clone());
+    let slug = target_slug
+        .map(|slug| slug.nfc().collect::<String>())
+        .unwrap_or_else(|| source_note.locator.slug.clone());
     let new_identity = derive_identity(&target_spec.name, &target_domain, &slug)
         .map_err(|_| RelocateError::Invalid("target slug is invalid".into()))?;
     if target_snapshot
@@ -269,10 +271,17 @@ pub fn apply_relocate(plan: &RelocatePlan) -> Result<(), RelocateError> {
     if source_git.root != target_git.root {
         relocate_ledger_baseline(&target_git, "relocate")?;
     }
-    crate::frozen::check_staged_frozen_for_specs(
-        &source_git,
-        &[plan.source_spec.clone(), plan.target_spec.clone()],
-    )?;
+    if source_git.root == target_git.root {
+        crate::frozen::check_staged_frozen_for_specs(
+            &source_git,
+            &[plan.source_spec.clone(), plan.target_spec.clone()],
+        )?;
+    } else {
+        crate::frozen::check_staged_target_for_specs(
+            &target_git,
+            std::slice::from_ref(&plan.target_spec),
+        )?;
+    }
     if source_git.head_oid()? != plan.source_head || target_git.head_oid()? != plan.target_head {
         return Err(RelocateError::Invalid("relocate plan is stale".into()));
     }

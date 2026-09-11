@@ -2,13 +2,18 @@
 
 //! Source-plane boundaries for Git-backed Markdown knowledge.
 
+pub mod adopt;
 pub mod amend;
+pub mod author;
+pub mod capture;
 pub mod check;
+pub mod doctor;
 pub mod frozen;
 pub mod git;
 pub mod human_index;
 pub mod ledger;
 pub mod links;
+pub mod mermaid;
 pub mod relocate;
 pub mod source;
 

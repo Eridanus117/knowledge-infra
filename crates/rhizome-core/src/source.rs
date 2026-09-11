@@ -216,6 +216,38 @@ pub(crate) fn open_absolute_dir_nofollow(path: &Path) -> io::Result<Dir> {
 pub(crate) fn open_absolute_dir_nofollow(_path: &Path) -> io::Result<Dir> {
     Err(io::ErrorKind::Unsupported.into())
 }
+/// Create an absolute directory path one component at a time without following symlinks.
+pub(crate) fn create_directory_tree_nofollow(path: &Path) -> io::Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::path::absolute(path)?
+    };
+    let mut current = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::Prefix(prefix) => current.push(prefix.as_os_str()),
+            Component::RootDir => current.push(Path::new(std::path::MAIN_SEPARATOR_STR)),
+            Component::CurDir => {}
+            Component::ParentDir => return Err(io::ErrorKind::InvalidInput.into()),
+            Component::Normal(name) => {
+                current.push(name);
+                match fs::symlink_metadata(&current) {
+                    Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                        return Err(io::ErrorKind::InvalidData.into());
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        fs::create_dir(&current)?;
+                    }
+                    Err(error) => return Err(error),
+                }
+                let _ = open_absolute_dir_nofollow(&current)?;
+            }
+        }
+    }
+    Ok(absolute)
+}
 
 fn open_relative_directory(root: &Dir, relative: &Path) -> io::Result<Dir> {
     let mut directory = root.try_clone()?;
@@ -334,6 +366,12 @@ pub(crate) fn open_regular_file_for_append_nofollow(path: &Path) -> io::Result<F
     }
 }
 
+/// Read and validate one Markdown note through a no-follow regular-file handle.
+pub fn parse_note_file_nofollow(path: &Path) -> Result<ValidatedNote, Vec<Diagnostic>> {
+    let bytes = read_regular_file_nofollow_bounded(path, 64 * 1024 * 1024)
+        .map_err(|_| vec![read_diagnostic(path.to_path_buf())])?;
+    parse_and_validate_note(path, &bytes)
+}
 pub(crate) fn write_regular_file_nofollow(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
     let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
