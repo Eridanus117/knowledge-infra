@@ -616,6 +616,29 @@ fn snapshot_order_is_domain_then_source_relative_path() {
 }
 
 #[test]
+fn snapshot_note_paths_use_source_relative_posix_string_order() {
+    let scratch = ScratchDirectory::new();
+    let git_root = install_fixture(&scratch, "domains/note-order/desk", "desk");
+    let source_root = git_root.join("vault");
+    let context = source_context(&source_root, &git_root);
+
+    let snapshot = discover_ok(&context);
+
+    assert_eq!(
+        snapshot
+            .notes
+            .iter()
+            .map(|note| source_relative(&context.source.root, &note.locator.path))
+            .collect::<Vec<_>>(),
+        vec![
+            "topic/INDEX.md",
+            "topic/blue-template/b.md",
+            "topic/blue/a.md",
+        ]
+    );
+}
+
+#[test]
 fn source_and_git_root_moves_leave_all_logical_identities_unchanged() {
     let scratch = ScratchDirectory::new();
     let git_root = install_fixture(&scratch, "identity/stable/desk", "desk");
@@ -744,6 +767,28 @@ fn nfc_and_full_unicode_casefold_note_collision_reports_both_paths() {
             diagnostic,
             "KBV2-IDENTITY-COLLISION",
             &expected_path,
+            None,
+            IDENTITY_COLLISION_MESSAGE,
+        );
+    }
+}
+
+#[test]
+fn unicode_seventeen_full_casefold_note_collision_reports_both_paths() {
+    let scratch = ScratchDirectory::new();
+    let git_root = install_fixture(&scratch, "identity/unicode-17-collision/desk", "desk");
+    let source_root = git_root.join("vault");
+    let context = source_context(&source_root, &git_root);
+
+    let diagnostics = discover_err(&context);
+
+    assert_eq!(diagnostics.len(), 2);
+    let expected = ["topic/left/Ა.md", "topic/right/ა.md"];
+    for (diagnostic, relative) in diagnostics.iter().zip(expected) {
+        assert_diagnostic(
+            diagnostic,
+            "KBV2-IDENTITY-COLLISION",
+            &context.source.root.join(relative),
             None,
             IDENTITY_COLLISION_MESSAGE,
         );
@@ -900,6 +945,28 @@ fn directory_symlink_escapes_are_never_followed() {
     assert!(snapshot.notes.iter().all(|note| {
         !source_relative(&context.source.root, &note.locator.path).starts_with("linked-domain/")
     }));
+}
+
+#[cfg(unix)]
+#[test]
+fn deep_walk_does_not_retain_one_directory_handle_per_level() {
+    let scratch = ScratchDirectory::new();
+    let git_root = scratch.path().join("desk");
+    make_dir(git_root.join(".git"));
+    let source_root = git_root.join("vault");
+    let mut deepest = source_root.clone();
+    for _ in 0..300 {
+        deepest.push("d");
+    }
+    write_index(deepest.join("INDEX.md"), "Deep domain");
+    write_note(deepest.join("note.md"), "Deep note");
+    let context = source_context(&source_root, &git_root);
+
+    let snapshot = discover_ok(&context);
+
+    assert_eq!(snapshot.domains.len(), 1);
+    assert_eq!(snapshot.domains[0].id.as_str(), "d");
+    assert_eq!(snapshot.notes.len(), 2);
 }
 
 #[test]

@@ -7,6 +7,11 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+cap-fs-ext.workspace = true
+cap-std.workspace = true
+focaccia.workspace = true
 kb-contract.workspace = true
-unicode-casefold.workspace = true
 unicode-normalization.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

@@ -1,12 +1,19 @@
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::ambient_authority;
+#[cfg(unix)]
+use cap_std::fs::OpenOptionsExt;
+use cap_std::fs::{Dir, File, OpenOptions};
+use focaccia::CaseFold;
 use kb_contract::{
     Diagnostic, DomainId, Identity, NoteKind, SourceName, SourceSpec, ValidatedNote,
     derive_identity, parse_and_validate_note,
 };
-use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::path::{Path, PathBuf};
-use unicode_casefold::UnicodeCaseFold;
+use std::io::{self, Read};
+#[cfg(windows)]
+use std::path::Prefix;
+use std::path::{Component, Path, PathBuf};
 use unicode_normalization::UnicodeNormalization;
 
 const GIT_ROOT: &str = "KBV2-SOURCE-GIT-ROOT";
@@ -75,39 +82,59 @@ pub struct SourceSnapshot {
     pub notes: Vec<SnapshotNote>,
 }
 
+struct OpenedSource {
+    root: PathBuf,
+    directory: Dir,
+    _git_root: Dir,
+}
+
+struct WalkedDirectory {
+    relative_path: PathBuf,
+    nearest_domain: Option<DomainId>,
+    domain_lineage_valid: bool,
+}
+
 struct WalkedSource {
-    domain_indexes: Vec<PathBuf>,
-    markdown: Vec<PathBuf>,
+    domains: Vec<DomainNode>,
+    notes: Vec<SnapshotNote>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+struct WalkedEntry {
+    file_name: OsString,
+    is_symlink: bool,
+    is_dir: bool,
+    is_file: bool,
 }
 
 /// Discover and validate every domain and in-domain Markdown note in a source.
 pub fn discover_source(context: &SourceContext) -> Result<SourceSnapshot, Vec<Diagnostic>> {
-    let source_root = validate_roots(context).map_err(|diagnostic| vec![diagnostic])?;
-    let walked = walk_source(&source_root)?;
-    let domains = build_domains(&source_root, &walked.domain_indexes)?;
+    let opened = validate_roots(context).map_err(|diagnostic| vec![diagnostic])?;
+    let source_root = opened.root;
+    let walked = walk_source(&context.source.name, &source_root, &opened.directory)?;
+
+    let mut domains = walked.domains;
+    domains.sort_by_cached_key(|domain| {
+        (
+            domain.id.clone(),
+            source_relative_sort_key(&source_root, &domain.index_path),
+        )
+    });
     reject_duplicate_domains(&source_root, &domains)?;
 
-    let mut diagnostics = Vec::new();
-    let mut notes = load_domain_indexes(context, &domains, &mut diagnostics);
-    load_ordinary_notes(
-        context,
-        &source_root,
-        &domains,
-        &walked.markdown,
-        &mut notes,
-        &mut diagnostics,
-    );
+    let mut diagnostics = walked.diagnostics;
     if !diagnostics.is_empty() {
         sort_diagnostics(&source_root, &mut diagnostics);
         return Err(diagnostics);
     }
 
+    let mut notes = walked.notes;
     reject_identity_collisions(&source_root, &notes)?;
-    notes.sort_by(|left, right| {
-        left.locator
-            .domain
-            .cmp(&right.locator.domain)
-            .then_with(|| left.locator.path.cmp(&right.locator.path))
+    notes.sort_by_cached_key(|note| {
+        (
+            note.locator.domain.clone(),
+            source_relative_sort_key(&source_root, &note.locator.path),
+        )
     });
 
     Ok(SourceSnapshot {
@@ -117,98 +144,343 @@ pub fn discover_source(context: &SourceContext) -> Result<SourceSnapshot, Vec<Di
     })
 }
 
-fn validate_roots(context: &SourceContext) -> Result<PathBuf, Diagnostic> {
+fn validate_roots(context: &SourceContext) -> Result<OpenedSource, Diagnostic> {
+    // Canonicalization is used only to resolve the configured roots. All subsequent
+    // authority comes from the retained handles and handle-relative nofollow opens.
     let git_root = fs::canonicalize(&context.git_root)
         .map_err(|_| git_root_diagnostic(context.git_root.clone()))?;
-    let git_metadata =
-        fs::metadata(&git_root).map_err(|_| git_root_diagnostic(context.git_root.clone()))?;
-    if !git_metadata.is_dir() || !has_exact_git_marker(&git_root)? {
+    let source_root = fs::canonicalize(&context.source.root)
+        .map_err(|_| read_diagnostic(context.source.root.clone()))?;
+
+    let git_directory = open_absolute_dir_nofollow(&git_root)
+        .map_err(|_| git_root_diagnostic(context.git_root.clone()))?;
+    let git_metadata = git_directory
+        .dir_metadata()
+        .map_err(|_| git_root_diagnostic(context.git_root.clone()))?;
+    if !git_metadata.is_dir()
+        || !has_exact_git_marker(&git_directory)
+            .map_err(|_| git_root_diagnostic(context.git_root.clone()))?
+    {
         return Err(git_root_diagnostic(context.git_root.clone()));
     }
 
-    let source_root = fs::canonicalize(&context.source.root)
-        .map_err(|_| read_diagnostic(context.source.root.clone()))?;
-    let source_metadata =
-        fs::metadata(&source_root).map_err(|_| read_diagnostic(context.source.root.clone()))?;
-    if !source_metadata.is_dir() {
-        return Err(read_diagnostic(context.source.root.clone()));
-    }
     if source_root != git_root && !source_root.starts_with(&git_root) {
         return Err(Diagnostic::error(OUTSIDE_GIT, OUTSIDE_GIT_MESSAGE).at_path(source_root));
     }
 
-    Ok(source_root)
+    let relative_source = source_root
+        .strip_prefix(&git_root)
+        .expect("contained canonical source root is relative to canonical Git root");
+    let source_directory = open_relative_directory(&git_directory, relative_source)
+        .map_err(|_| read_diagnostic(context.source.root.clone()))?;
+
+    Ok(OpenedSource {
+        root: source_root,
+        directory: source_directory,
+        _git_root: git_directory,
+    })
 }
 
-fn has_exact_git_marker(git_root: &Path) -> Result<bool, Diagnostic> {
-    let entries =
-        fs::read_dir(git_root).map_err(|_| git_root_diagnostic(git_root.to_path_buf()))?;
-    for entry in entries {
-        let entry = entry.map_err(|_| git_root_diagnostic(git_root.to_path_buf()))?;
-        if entry.file_name() != OsStr::new(".git") {
+#[cfg(unix)]
+fn open_absolute_dir_nofollow(path: &Path) -> io::Result<Dir> {
+    let mut components = path.components();
+    if !matches!(components.next(), Some(Component::RootDir)) {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let root = Dir::open_ambient_dir(Path::new("/"), ambient_authority())?;
+    open_relative_directory(&root, components.as_path())
+}
+
+#[cfg(windows)]
+fn open_absolute_dir_nofollow(path: &Path) -> io::Result<Dir> {
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return Err(io::ErrorKind::InvalidInput.into());
+    };
+    if !matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+        || !matches!(components.next(), Some(Component::RootDir))
+    {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+
+    let mut anchor = PathBuf::from(prefix.as_os_str());
+    anchor.push(Path::new(r"\"));
+    let root = Dir::open_ambient_dir(anchor, ambient_authority())?;
+    open_relative_directory(&root, components.as_path())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_absolute_dir_nofollow(_path: &Path) -> io::Result<Dir> {
+    Err(io::ErrorKind::Unsupported.into())
+}
+
+fn open_relative_directory(root: &Dir, relative: &Path) -> io::Result<Dir> {
+    let mut directory = root.try_clone()?;
+    for component in relative.components() {
+        let Component::Normal(name) = component else {
+            return Err(io::ErrorKind::InvalidInput.into());
+        };
+        directory = open_directory_nofollow(&directory, name)?;
+    }
+    Ok(directory)
+}
+
+fn open_directory_nofollow(parent: &Dir, name: &OsStr) -> io::Result<Dir> {
+    // cap-std opens Windows directory handles without FILE_SHARE_DELETE; keeping
+    // that retained handle while enumerating prevents rename/delete races.
+    let directory = parent.open_dir_nofollow(Path::new(name))?;
+    if directory.dir_metadata()?.is_dir() {
+        Ok(directory)
+    } else {
+        Err(io::ErrorKind::InvalidData.into())
+    }
+}
+
+fn open_regular_file_nofollow(parent: &Dir, name: &OsStr) -> io::Result<(File, u64)> {
+    let mut options = OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NONBLOCK);
+
+    let file = parent.open_with(Path::new(name), &options)?;
+    let metadata = file.metadata()?;
+    if metadata.is_file() {
+        Ok((file, metadata.len()))
+    } else {
+        Err(io::ErrorKind::InvalidData.into())
+    }
+}
+
+fn has_exact_git_marker(git_root: &Dir) -> io::Result<bool> {
+    for entry in git_root.entries()? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        if file_name != OsStr::new(".git") {
             continue;
         }
-        let file_type = entry
-            .file_type()
-            .map_err(|_| git_root_diagnostic(git_root.to_path_buf()))?;
-        return Ok(file_type.is_file() || file_type.is_dir());
+
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            return Ok(open_directory_nofollow(git_root, &file_name).is_ok());
+        }
+        if file_type.is_file() {
+            return Ok(open_regular_file_nofollow(git_root, &file_name).is_ok());
+        }
+        return Ok(false);
     }
     Ok(false)
 }
 
-fn walk_source(source_root: &Path) -> Result<WalkedSource, Vec<Diagnostic>> {
-    let mut stack = vec![source_root.to_path_buf()];
-    let mut domain_indexes = Vec::new();
-    let mut markdown = Vec::new();
+fn walk_source(
+    source_name: &SourceName,
+    source_root: &Path,
+    source_directory: &Dir,
+) -> Result<WalkedSource, Vec<Diagnostic>> {
+    let mut stack = vec![WalkedDirectory {
+        relative_path: PathBuf::new(),
+        nearest_domain: None,
+        domain_lineage_valid: true,
+    }];
+    let mut domains = Vec::new();
+    let mut notes = Vec::new();
+    let mut diagnostics = Vec::new();
 
     while let Some(directory) = stack.pop() {
-        let entries = match fs::read_dir(&directory) {
-            Ok(entries) => entries,
-            Err(_) => return Err(vec![read_diagnostic(directory)]),
+        // Reopen only relative to the retained source capability. The handle is
+        // dropped at the end of this iteration, so directory handles stay bounded.
+        let directory_handle = open_relative_directory(source_directory, &directory.relative_path)
+            .map_err(|_| vec![read_diagnostic(source_root.join(&directory.relative_path))])?;
+        let directory_path = source_root.join(&directory.relative_path);
+        let entries = directory_handle
+            .entries()
+            .map_err(|_| vec![read_diagnostic(directory_path.clone())])?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| vec![read_diagnostic(directory_path.clone())])?;
+
+        let mut entries = entries
+            .into_iter()
+            .map(|entry| {
+                let file_name = entry.file_name();
+                entry.file_type().map(|file_type| (file_name, file_type))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| vec![read_diagnostic(directory_path.clone())])?;
+        entries.sort_by_cached_key(|(file_name, _)| {
+            relative_posix_sort_key(&directory.relative_path.join(file_name))
+        });
+
+        let entries = entries
+            .into_iter()
+            .map(|(file_name, file_type)| WalkedEntry {
+                file_name,
+                is_symlink: file_type.is_symlink(),
+                is_dir: file_type.is_dir(),
+                is_file: file_type.is_file(),
+            })
+            .collect::<Vec<_>>();
+
+        let has_index = !directory.relative_path.as_os_str().is_empty()
+            && entries.iter().any(|entry| {
+                !entry.is_symlink && entry.is_file && entry.file_name == OsStr::new(INDEX_FILENAME)
+            });
+        let current_domain = if has_index {
+            let index_path = directory_path.join(INDEX_FILENAME);
+            if !directory.domain_lineage_valid {
+                diagnostics.push(invalid_domain_diagnostic().at_path(index_path));
+                None
+            } else {
+                let Some(segment) = directory.relative_path.file_name().and_then(OsStr::to_str)
+                else {
+                    diagnostics.push(invalid_domain_diagnostic().at_path(index_path));
+                    return Err(diagnostics);
+                };
+                let raw = match &directory.nearest_domain {
+                    Some(parent) => format!("{parent}/{segment}"),
+                    None => segment.to_owned(),
+                };
+                match DomainId::new(&raw) {
+                    Ok(id) => {
+                        domains.push(DomainNode {
+                            id: id.clone(),
+                            physical_dir: directory_path.clone(),
+                            index_path,
+                        });
+                        Some(id)
+                    }
+                    Err(diagnostic) => {
+                        diagnostics.push(diagnostic.at_path(index_path));
+                        None
+                    }
+                }
+            }
+        } else if directory.domain_lineage_valid {
+            directory.nearest_domain.clone()
+        } else {
+            None
         };
-        let mut entries = match entries.collect::<Result<Vec<_>, _>>() {
-            Ok(entries) => entries,
-            Err(_) => return Err(vec![read_diagnostic(directory)]),
-        };
-        entries.sort_by_key(|entry| entry.file_name());
+        let current_lineage_valid =
+            directory.domain_lineage_valid && (!has_index || current_domain.is_some());
 
         let mut child_directories = Vec::new();
         for entry in entries {
-            let path = entry.path();
-            let file_type = match entry.file_type() {
-                Ok(file_type) => file_type,
-                Err(_) => return Err(vec![read_diagnostic(path)]),
+            let relative_path = directory.relative_path.join(&entry.file_name);
+            let path = source_root.join(&relative_path);
+            if entry.is_symlink {
+                continue;
+            }
+            if entry.is_dir {
+                if !skip_directory(&entry.file_name) {
+                    child_directories.push(relative_path);
+                }
+                continue;
+            }
+            if !entry.is_file || Path::new(&entry.file_name).extension() != Some(OsStr::new("md")) {
+                continue;
+            }
+            if entry.file_name == OsStr::new(INDEX_FILENAME) {
+                if current_domain.is_none() {
+                    continue;
+                }
+                let (file, expected_len) =
+                    open_regular_file_nofollow(&directory_handle, &entry.file_name)
+                        .map_err(|_| vec![read_diagnostic(path.clone())])?;
+                let note = match read_note(&path, file, expected_len) {
+                    Ok(note) => note,
+                    Err(mut failures) => {
+                        diagnostics.append(&mut failures);
+                        continue;
+                    }
+                };
+                if note.frontmatter.kind != NoteKind::Index {
+                    diagnostics.push(
+                        Diagnostic::error(INDEX_KIND, INDEX_KIND_MESSAGE)
+                            .at_path(path.clone())
+                            .for_field("kind"),
+                    );
+                    continue;
+                }
+                let domain = current_domain
+                    .as_ref()
+                    .expect("an exact non-root INDEX.md has a domain");
+                let identity = match derive_identity(source_name, domain, "INDEX") {
+                    Ok(identity) => identity,
+                    Err(diagnostic) => {
+                        diagnostics.push(diagnostic.at_path(path));
+                        continue;
+                    }
+                };
+                notes.push(SnapshotNote {
+                    locator: NoteLocator {
+                        identity,
+                        domain: domain.clone(),
+                        slug: "INDEX".to_owned(),
+                        path,
+                        is_domain_index: true,
+                    },
+                    note,
+                });
+                continue;
+            }
+            let Some(domain) = current_domain.as_ref() else {
+                continue;
             };
-            if file_type.is_symlink() {
-                continue;
-            }
-            if file_type.is_dir() {
-                if !skip_directory(&entry.file_name()) {
-                    child_directories.push(path);
+            let slug = match Path::new(&entry.file_name)
+                .file_stem()
+                .and_then(OsStr::to_str)
+            {
+                Some(slug) => slug,
+                None => {
+                    diagnostics.push(invalid_slug_diagnostic(path));
+                    continue;
                 }
-                continue;
-            }
-            if !file_type.is_file() || path.extension() != Some(OsStr::new("md")) {
-                continue;
-            }
-            if entry.file_name() == OsStr::new(INDEX_FILENAME) {
-                if directory != source_root {
-                    domain_indexes.push(path);
+            };
+            let normalized_slug = slug.nfc().collect::<String>();
+            let identity = match derive_identity(source_name, domain, &normalized_slug) {
+                Ok(identity) => identity,
+                Err(diagnostic) => {
+                    diagnostics.push(diagnostic.at_path(path));
+                    continue;
                 }
-            } else {
-                markdown.push(path);
-            }
+            };
+            let (file, expected_len) =
+                open_regular_file_nofollow(&directory_handle, &entry.file_name)
+                    .map_err(|_| vec![read_diagnostic(path.clone())])?;
+            let note = match read_note(&path, file, expected_len) {
+                Ok(note) => note,
+                Err(mut failures) => {
+                    diagnostics.append(&mut failures);
+                    continue;
+                }
+            };
+            notes.push(SnapshotNote {
+                locator: NoteLocator {
+                    identity,
+                    domain: domain.clone(),
+                    slug: normalized_slug,
+                    path,
+                    is_domain_index: false,
+                },
+                note,
+            });
         }
 
-        child_directories.sort();
-        stack.extend(child_directories.into_iter().rev());
+        child_directories.sort_by_cached_key(|path| relative_posix_sort_key(path));
+        stack.extend(
+            child_directories
+                .into_iter()
+                .rev()
+                .map(|relative_path| WalkedDirectory {
+                    relative_path,
+                    nearest_domain: current_domain.clone(),
+                    domain_lineage_valid: current_lineage_valid,
+                }),
+        );
     }
 
-    domain_indexes.sort();
-    markdown.sort();
     Ok(WalkedSource {
-        domain_indexes,
-        markdown,
+        domains,
+        notes,
+        diagnostics,
     })
 }
 
@@ -221,234 +493,93 @@ fn skip_directory(name: &OsStr) -> bool {
         .any(|skipped| name == OsStr::new(skipped))
 }
 
-fn build_domains(
-    source_root: &Path,
-    index_paths: &[PathBuf],
-) -> Result<Vec<DomainNode>, Vec<Diagnostic>> {
-    let index_directories = index_paths
-        .iter()
-        .filter_map(|path| path.parent().map(Path::to_path_buf))
-        .collect::<BTreeSet<_>>();
-    let mut domains = Vec::with_capacity(index_paths.len());
-    let mut diagnostics = Vec::new();
-
-    for index_path in index_paths {
-        let physical_dir = index_path
-            .parent()
-            .expect("walked INDEX.md has a parent")
-            .to_path_buf();
-        match derive_domain_id(source_root, &physical_dir, &index_directories) {
-            Ok(id) => domains.push(DomainNode {
-                id,
-                physical_dir,
-                index_path: index_path.clone(),
-            }),
-            Err(diagnostic) => diagnostics.push(diagnostic.at_path(index_path.clone())),
-        }
-    }
-    if !diagnostics.is_empty() {
-        sort_diagnostics(source_root, &mut diagnostics);
-        return Err(diagnostics);
-    }
-
-    domains.sort_by(|left, right| {
-        left.id
-            .cmp(&right.id)
-            .then_with(|| left.index_path.cmp(&right.index_path))
-    });
-    Ok(domains)
-}
-
-fn derive_domain_id(
-    source_root: &Path,
-    physical_dir: &Path,
-    index_directories: &BTreeSet<PathBuf>,
-) -> Result<DomainId, Diagnostic> {
-    let relative = physical_dir
-        .strip_prefix(source_root)
-        .expect("walked domain directory is inside its source root");
-    let mut current = source_root.to_path_buf();
-    let mut raw = String::new();
-
-    for component in relative.components() {
-        current.push(component.as_os_str());
-        if !index_directories.contains(&current) {
-            continue;
-        }
-        let segment = component
-            .as_os_str()
-            .to_str()
-            .ok_or_else(|| invalid_domain_diagnostic())?;
-        if !raw.is_empty() {
-            raw.push('/');
-        }
-        raw.push_str(segment);
-    }
-
-    DomainId::new(&raw)
-}
-
 fn reject_duplicate_domains(
     source_root: &Path,
     domains: &[DomainNode],
 ) -> Result<(), Vec<Diagnostic>> {
-    let mut by_key: BTreeMap<String, Vec<&DomainNode>> = BTreeMap::new();
-    for domain in domains {
-        by_key
-            .entry(casefold_key(domain.id.as_str()))
-            .or_default()
-            .push(domain);
-    }
+    let mut ordered = domains
+        .iter()
+        .map(|domain| {
+            (
+                source_relative_sort_key(source_root, &domain.index_path),
+                domain,
+            )
+        })
+        .collect::<Vec<_>>();
+    ordered.sort_by(|(left_path, left), (right_path, right)| {
+        CaseFold::Full
+            .casecmp(left.id.as_str(), right.id.as_str())
+            .then_with(|| left_path.cmp(right_path))
+    });
 
     let mut diagnostics = Vec::new();
-    for mut repeated in by_key.into_values().filter(|nodes| nodes.len() > 1) {
-        repeated
-            .sort_by_cached_key(|domain| source_relative_sort_key(source_root, &domain.index_path));
-        diagnostics.extend(repeated.into_iter().map(|domain| {
-            Diagnostic::error(DUPLICATE_DOMAIN, DUPLICATE_DOMAIN_MESSAGE)
-                .at_path(domain.index_path.clone())
-        }));
+    let mut start = 0;
+    while start < ordered.len() {
+        let mut end = start + 1;
+        while end < ordered.len()
+            && CaseFold::Full.case_eq(ordered[start].1.id.as_str(), ordered[end].1.id.as_str())
+        {
+            end += 1;
+        }
+        if end - start > 1 {
+            diagnostics.extend(ordered[start..end].iter().map(|(_, domain)| {
+                Diagnostic::error(DUPLICATE_DOMAIN, DUPLICATE_DOMAIN_MESSAGE)
+                    .at_path(domain.index_path.clone())
+            }));
+        }
+        start = end;
     }
+
     if diagnostics.is_empty() {
         Ok(())
     } else {
         Err(diagnostics)
     }
-}
-
-fn load_domain_indexes(
-    context: &SourceContext,
-    domains: &[DomainNode],
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Vec<SnapshotNote> {
-    let mut notes = Vec::with_capacity(domains.len());
-    for domain in domains {
-        let note = match read_note(&domain.index_path) {
-            Ok(note) => note,
-            Err(mut failures) => {
-                diagnostics.append(&mut failures);
-                continue;
-            }
-        };
-        if note.frontmatter.kind != NoteKind::Index {
-            diagnostics.push(
-                Diagnostic::error(INDEX_KIND, INDEX_KIND_MESSAGE)
-                    .at_path(domain.index_path.clone())
-                    .for_field("kind"),
-            );
-            continue;
-        }
-        let identity = derive_identity(&context.source.name, &domain.id, "INDEX")
-            .expect("the fixed INDEX slug is valid");
-        notes.push(SnapshotNote {
-            locator: NoteLocator {
-                identity,
-                domain: domain.id.clone(),
-                slug: "INDEX".to_owned(),
-                path: domain.index_path.clone(),
-                is_domain_index: true,
-            },
-            note,
-        });
-    }
-    notes
-}
-
-fn load_ordinary_notes(
-    context: &SourceContext,
-    source_root: &Path,
-    domains: &[DomainNode],
-    paths: &[PathBuf],
-    notes: &mut Vec<SnapshotNote>,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let domains_by_directory = domains
-        .iter()
-        .map(|domain| (domain.physical_dir.clone(), domain.id.clone()))
-        .collect::<BTreeMap<_, _>>();
-
-    for path in paths {
-        let Some(domain) = nearest_domain(path, source_root, &domains_by_directory) else {
-            continue;
-        };
-        let slug = match path.file_stem().and_then(OsStr::to_str) {
-            Some(slug) => slug,
-            None => {
-                diagnostics.push(invalid_slug_diagnostic(path.clone()));
-                continue;
-            }
-        };
-        let normalized_slug = slug.nfc().collect::<String>();
-        let identity = match derive_identity(&context.source.name, domain, &normalized_slug) {
-            Ok(identity) => identity,
-            Err(diagnostic) => {
-                diagnostics.push(diagnostic.at_path(path.clone()));
-                continue;
-            }
-        };
-        let note = match read_note(path) {
-            Ok(note) => note,
-            Err(mut failures) => {
-                diagnostics.append(&mut failures);
-                continue;
-            }
-        };
-
-        notes.push(SnapshotNote {
-            locator: NoteLocator {
-                identity,
-                domain: domain.clone(),
-                slug: normalized_slug,
-                path: path.clone(),
-                is_domain_index: false,
-            },
-            note,
-        });
-    }
-}
-
-fn nearest_domain<'a>(
-    note_path: &Path,
-    source_root: &Path,
-    domains: &'a BTreeMap<PathBuf, DomainId>,
-) -> Option<&'a DomainId> {
-    let mut directory = note_path.parent()?;
-    loop {
-        if let Some(domain) = domains.get(directory) {
-            return Some(domain);
-        }
-        if directory == source_root {
-            return None;
-        }
-        directory = directory.parent()?;
-    }
-}
-
-fn read_note(path: &Path) -> Result<ValidatedNote, Vec<Diagnostic>> {
-    let bytes = fs::read(path).map_err(|_| vec![read_diagnostic(path.to_path_buf())])?;
-    parse_and_validate_note(path, &bytes)
 }
 
 fn reject_identity_collisions(
     source_root: &Path,
     notes: &[SnapshotNote],
 ) -> Result<(), Vec<Diagnostic>> {
-    let mut by_key: BTreeMap<String, Vec<&Path>> = BTreeMap::new();
-    for note in notes {
-        by_key
-            .entry(casefold_key(note.locator.identity.as_str()))
-            .or_default()
-            .push(&note.locator.path);
-    }
+    let mut ordered = notes
+        .iter()
+        .map(|note| {
+            (
+                source_relative_sort_key(source_root, &note.locator.path),
+                note,
+            )
+        })
+        .collect::<Vec<_>>();
+    ordered.sort_by(|(left_path, left), (right_path, right)| {
+        CaseFold::Full
+            .casecmp(
+                left.locator.identity.as_str(),
+                right.locator.identity.as_str(),
+            )
+            .then_with(|| left_path.cmp(right_path))
+    });
 
     let mut diagnostics = Vec::new();
-    for mut repeated in by_key.into_values().filter(|paths| paths.len() > 1) {
-        repeated.sort_by_cached_key(|path| source_relative_sort_key(source_root, path));
-        diagnostics.extend(repeated.into_iter().map(|path| {
-            Diagnostic::error(IDENTITY_COLLISION, IDENTITY_COLLISION_MESSAGE)
-                .at_path(path.to_path_buf())
-        }));
+    let mut start = 0;
+    while start < ordered.len() {
+        let mut end = start + 1;
+        while end < ordered.len()
+            && CaseFold::Full.case_eq(
+                ordered[start].1.locator.identity.as_str(),
+                ordered[end].1.locator.identity.as_str(),
+            )
+        {
+            end += 1;
+        }
+        if end - start > 1 {
+            diagnostics.extend(ordered[start..end].iter().map(|(_, note)| {
+                Diagnostic::error(IDENTITY_COLLISION, IDENTITY_COLLISION_MESSAGE)
+                    .at_path(note.locator.path.clone())
+            }));
+        }
+        start = end;
     }
+
     if diagnostics.is_empty() {
         Ok(())
     } else {
@@ -456,20 +587,33 @@ fn reject_identity_collisions(
     }
 }
 
-fn casefold_key(value: &str) -> String {
-    value.case_fold().collect()
+fn read_note(path: &Path, file: File, expected_len: u64) -> Result<ValidatedNote, Vec<Diagnostic>> {
+    let limit = expected_len
+        .checked_add(1)
+        .ok_or_else(|| vec![read_diagnostic(path.to_path_buf())])?;
+    let mut bytes = Vec::new();
+    file.take(limit)
+        .read_to_end(&mut bytes)
+        .map_err(|_| vec![read_diagnostic(path.to_path_buf())])?;
+    if u64::try_from(bytes.len()).ok() != Some(expected_len) {
+        return Err(vec![read_diagnostic(path.to_path_buf())]);
+    }
+    parse_and_validate_note(path, &bytes)
 }
 
-fn source_relative_sort_key(source_root: &Path, path: &Path) -> String {
-    let relative = path.strip_prefix(source_root).unwrap_or(path);
+fn relative_posix_sort_key(path: &Path) -> String {
     let mut key = String::new();
-    for component in relative.components() {
+    for component in path.components() {
         if !key.is_empty() {
             key.push('/');
         }
         key.push_str(&component.as_os_str().to_string_lossy());
     }
     key
+}
+
+fn source_relative_sort_key(source_root: &Path, path: &Path) -> String {
+    relative_posix_sort_key(path.strip_prefix(source_root).unwrap_or(path))
 }
 
 fn sort_diagnostics(source_root: &Path, diagnostics: &mut [Diagnostic]) {
