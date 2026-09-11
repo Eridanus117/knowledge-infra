@@ -80,6 +80,7 @@ pub struct SourceSnapshot {
     pub source: SourceName,
     pub domains: Vec<DomainNode>,
     pub notes: Vec<SnapshotNote>,
+    pub(crate) source_root: PathBuf,
 }
 
 struct OpenedSource {
@@ -136,11 +137,11 @@ pub fn discover_source(context: &SourceContext) -> Result<SourceSnapshot, Vec<Di
             source_relative_sort_key(&source_root, &note.locator.path),
         )
     });
-
     Ok(SourceSnapshot {
         source: context.source.name.clone(),
         domains,
         notes,
+        source_root,
     })
 }
 
@@ -182,7 +183,7 @@ fn validate_roots(context: &SourceContext) -> Result<OpenedSource, Diagnostic> {
 }
 
 #[cfg(unix)]
-fn open_absolute_dir_nofollow(path: &Path) -> io::Result<Dir> {
+pub(crate) fn open_absolute_dir_nofollow(path: &Path) -> io::Result<Dir> {
     let mut components = path.components();
     if !matches!(components.next(), Some(Component::RootDir)) {
         return Err(io::ErrorKind::InvalidInput.into());
@@ -192,7 +193,7 @@ fn open_absolute_dir_nofollow(path: &Path) -> io::Result<Dir> {
 }
 
 #[cfg(windows)]
-fn open_absolute_dir_nofollow(path: &Path) -> io::Result<Dir> {
+pub(crate) fn open_absolute_dir_nofollow(path: &Path) -> io::Result<Dir> {
     let mut components = path.components();
     let Some(Component::Prefix(prefix)) = components.next() else {
         return Err(io::ErrorKind::InvalidInput.into());
@@ -210,7 +211,7 @@ fn open_absolute_dir_nofollow(path: &Path) -> io::Result<Dir> {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn open_absolute_dir_nofollow(_path: &Path) -> io::Result<Dir> {
+pub(crate) fn open_absolute_dir_nofollow(_path: &Path) -> io::Result<Dir> {
     Err(io::ErrorKind::Unsupported.into())
 }
 
@@ -246,6 +247,23 @@ fn open_regular_file_nofollow(parent: &Dir, name: &OsStr) -> io::Result<(File, u
     let metadata = file.metadata()?;
     if metadata.is_file() {
         Ok((file, metadata.len()))
+    } else {
+        Err(io::ErrorKind::InvalidData.into())
+    }
+}
+
+pub(crate) fn open_regular_file_for_update_nofollow(
+    parent: &Dir,
+    name: &OsStr,
+) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).follow(FollowSymlinks::No);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NONBLOCK);
+
+    let file = parent.open_with(Path::new(name), &options)?;
+    if file.metadata()?.is_file() {
+        Ok(file)
     } else {
         Err(io::ErrorKind::InvalidData.into())
     }

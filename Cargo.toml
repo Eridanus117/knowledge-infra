@@ -17,4 +17,6 @@ kb-contract = { path = "crates/kb-contract" }
 libc = "=0.2.177"
 rhizome-core = { path = "crates/rhizome-core" }
 toml = { version = "=0.9.8", default-features = false, features = ["parse", "serde"] }
+sha2 = "=0.11.0"
+winapi-util = "=0.1.11"
 unicode-normalization = "=0.1.25"
