@@ -26,6 +26,18 @@ pub enum MemexError {
     InvalidNdjson { line: usize, message: &'static str },
     /// The bytes parse as JSON but are not the canonical byte representation.
     NonCanonicalNdjson { line: usize },
+    /// A generation manifest is malformed or does not satisfy the v2 codec.
+    InvalidManifest { path: PathBuf, message: String },
+    /// A generation directory is incomplete, stale, or internally inconsistent.
+    InvalidGeneration { path: PathBuf, message: String },
+    /// Tantivy metadata or committed segment files are not a valid v2 index.
+    Tantivy { path: PathBuf, message: String },
+    /// Filesystem access failed at a generation boundary.
+    Io { path: PathBuf, message: String },
+    /// Another publisher owns the short publication lock.
+    LockContended { path: PathBuf },
+    /// The publication lock could not be opened or acquired.
+    Lock { path: PathBuf, message: String },
 }
 
 impl fmt::Display for MemexError {
@@ -71,6 +83,24 @@ impl fmt::Display for MemexError {
             }
             Self::NonCanonicalNdjson { line } => {
                 write!(formatter, "non-canonical NDJSON at line {line}")
+            }
+            Self::InvalidManifest { path, message } => {
+                write!(formatter, "invalid generation manifest at {}: {message}", path.display())
+            }
+            Self::InvalidGeneration { path, message } => {
+                write!(formatter, "invalid generation at {}: {message}", path.display())
+            }
+            Self::Tantivy { path, message } => {
+                write!(formatter, "invalid Tantivy index at {}: {message}", path.display())
+            }
+            Self::Io { path, message } => {
+                write!(formatter, "generation I/O failed at {}: {message}", path.display())
+            }
+            Self::LockContended { path } => {
+                write!(formatter, "publication lock is held: {}", path.display())
+            }
+            Self::Lock { path, message } => {
+                write!(formatter, "publication lock failed at {}: {message}", path.display())
             }
         }
     }

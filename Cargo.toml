@@ -23,3 +23,5 @@ winapi-util = "=0.1.11"
 unicode-normalization = "=0.1.25"
 tantivy = "=0.26.1"
 jieba-rs = { version = "=0.10.2", default-features = true }
+fs4 = "=0.13.1"
+windows-sys = { version = "=0.59.0", features = ["Win32_Storage_FileSystem"] }

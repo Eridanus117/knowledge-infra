@@ -1,4 +1,4 @@
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 
 //! Deterministic compiled-document and retrieval boundaries.
 
@@ -7,6 +7,9 @@ pub mod docs_ndjson;
 pub mod document;
 pub mod error;
 pub mod tantivy_schema;
+pub mod generation;
+pub mod lock;
+pub mod manifest;
 pub use analyzer::{NATURAL_V2, SLUG_V2, natural_v2, slug_v2};
 
 pub use docs_ndjson::{decode_ndjson, encode_ndjson};
@@ -21,4 +24,13 @@ pub use tantivy_schema::{
     FIELD_KIND_EXPLICIT, FIELD_SOURCE, FIELD_SOURCE_HASH, FIELD_SOURCE_PATH, FIELD_STATUS,
     FIELD_TITLE, INDEX_PROFILE, INDEX_PROFILE_V2, IndexProfile, build_schema, build_tantivy,
     register_analyzers,
+};
+
+pub use generation::{
+    GenerationReader, IndexManager, build_generation, open_current, publish,
+};
+pub use lock::PublicationLock;
+pub use manifest::{
+    GENERATION_CONTRACT_VERSION, GENERATION_SCHEMA, GenerationId, GenerationManifest,
+    decode_manifest, encode_manifest,
 };

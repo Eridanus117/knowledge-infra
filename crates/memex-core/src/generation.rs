@@ -1,0 +1,489 @@
+use crate::document::{DocumentRecord, sha256_hex};
+use crate::error::MemexError;
+use crate::lock::PublicationLock;
+use crate::manifest::{
+    GENERATION_CONTRACT_VERSION, GENERATION_SCHEMA, decode_manifest_at, encode_manifest,
+};
+pub use crate::manifest::{GenerationId, GenerationManifest};
+use crate::tantivy_schema::{INDEX_PROFILE, build_schema, build_tantivy, register_analyzers};
+use crate::{decode_ndjson, encode_ndjson};
+use sha2::{Digest, Sha256};
+use std::fs::{self, File};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use tantivy::Index;
+
+const CURRENT_FILENAME: &str = "CURRENT";
+const GENERATIONS_DIRECTORY: &str = "generations";
+const TEMP_GENERATION_PREFIX: &str = ".memex-generation-";
+const TEMP_GENERATION_SUFFIX: &str = ".tmp";
+const TEMP_CURRENT_PREFIX: &str = ".memex-current-";
+const TEMP_CURRENT_SUFFIX: &str = ".tmp";
+
+static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+
+/// Root of the immutable generation store.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IndexManager {
+    pub root: PathBuf,
+}
+
+impl IndexManager {
+    /// Construct a manager rooted at `root`.
+    #[must_use]
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+}
+
+/// A validated, immutable snapshot suitable for query consumers.
+#[derive(Debug)]
+pub struct GenerationReader {
+    pub id: GenerationId,
+    pub manifest: GenerationManifest,
+    pub index: Index,
+}
+
+/// Build one immutable generation without changing `CURRENT`.
+pub fn build_generation(
+    manager: &IndexManager,
+    records: &[DocumentRecord],
+) -> Result<GenerationId, MemexError> {
+    let docs = encode_ndjson(records)?;
+    let id = generation_id(&docs);
+    let manifest = GenerationManifest::new(id.clone(), sha256_hex(&docs), records.len() as u64);
+    let generations = manager.root.join(GENERATIONS_DIRECTORY);
+    fs::create_dir_all(&generations).map_err(|source| io_error(&generations, source))?;
+    cleanup_interrupted_temps(&generations);
+
+    let final_directory = generation_directory(manager, &id);
+    if final_directory.exists() {
+        let reader = validate_generation(manager, &id)?;
+        let existing_docs = read_regular_file(&final_directory.join("docs.ndjson"))?;
+        if existing_docs != docs {
+            return Err(invalid_generation(
+                &final_directory,
+                "same generation id has different docs bytes",
+            ));
+        }
+        drop(reader);
+        return Ok(id);
+    }
+
+    let temporary_directory = temporary_generation_directory(&generations, &id);
+    fs::create_dir(&temporary_directory).map_err(|source| io_error(&temporary_directory, source))?;
+    let build_result = build_temporary_generation(&temporary_directory, &docs, &manifest, records);
+    if let Err(error) = build_result {
+        let _ = fs::remove_dir_all(&temporary_directory);
+        return Err(error);
+    }
+
+    let rename_result = fs::rename(&temporary_directory, &final_directory);
+    match rename_result {
+        Ok(()) => {
+            sync_directory(&generations).map_err(|source| io_error(&generations, source))?;
+            Ok(id)
+        }
+        Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = fs::remove_dir_all(&temporary_directory);
+            let reader = validate_generation(manager, &id)?;
+            let existing_docs = read_regular_file(&final_directory.join("docs.ndjson"))?;
+            if existing_docs != docs {
+                return Err(invalid_generation(
+                    &final_directory,
+                    "concurrent same-id build has different docs bytes",
+                ));
+            }
+            drop(reader);
+            Ok(id)
+        }
+        Err(source) => {
+            let _ = fs::remove_dir_all(&temporary_directory);
+            Err(io_error(&final_directory, source))
+        }
+    }
+}
+
+/// Open and validate the generation named by the exact `CURRENT` bytes.
+pub fn open_current(manager: &IndexManager) -> Result<GenerationReader, MemexError> {
+    let current_path = manager.root.join(CURRENT_FILENAME);
+    let bytes = read_regular_file(&current_path)?;
+    let id = parse_current(&bytes, &current_path)?;
+    validate_generation(manager, &id)
+}
+
+/// Validate a complete generation and atomically make it current.
+pub fn publish(manager: &IndexManager, id: &GenerationId) -> Result<(), MemexError> {
+    let _ = validate_generation(manager, id)?;
+    let _lock = PublicationLock::try_acquire(&manager.root)?;
+    let _ = validate_generation(manager, id)?;
+
+    let current_path = manager.root.join(CURRENT_FILENAME);
+    let previous = match fs::symlink_metadata(&current_path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(invalid_generation(
+                    &current_path,
+                    "CURRENT must be a regular file",
+                ));
+            }
+            Some(read_regular_file(&current_path)?)
+        }
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => None,
+        Err(source) => return Err(io_error(&current_path, source)),
+    };
+
+    // Preflight the parent before the switch. The post-switch sync is retained
+    // for durability; if it fails, the old bytes are restored while the lock is
+    // still held.
+    sync_directory(&manager.root).map_err(|source| io_error(&manager.root, source))?;
+    let current_bytes = format!("{id}\n").into_bytes();
+    let temporary_current = temporary_current_path(&manager.root);
+    let write_result = write_file_sync(&temporary_current, &current_bytes)
+        .and_then(|_| atomic_replace(&temporary_current, &current_path));
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temporary_current);
+        return Err(error);
+    }
+    if let Err(source) = sync_directory(&manager.root) {
+        let rollback = restore_current(&manager.root, &current_path, previous.as_deref());
+        if rollback.is_err() {
+            return Err(io_error(
+                &current_path,
+                std::io::Error::other(format!(
+                    "CURRENT sync failed ({source}) and rollback failed"
+                )),
+            ));
+        }
+        return Err(io_error(&manager.root, source));
+    }
+    Ok(())
+}
+
+fn build_temporary_generation(
+    temporary_directory: &Path,
+    docs: &[u8],
+    manifest: &GenerationManifest,
+    records: &[DocumentRecord],
+) -> Result<(), MemexError> {
+    write_file_sync(&temporary_directory.join("docs.ndjson"), docs)?;
+    let manifest_bytes = encode_manifest(manifest)?;
+    write_file_sync(&temporary_directory.join("manifest.json"), &manifest_bytes)?;
+    let tantivy_directory = temporary_directory.join("tantivy");
+    fs::create_dir(&tantivy_directory).map_err(|source| io_error(&tantivy_directory, source))?;
+
+    let index = build_tantivy(&tantivy_directory, records)
+        .map_err(|source| tantivy_error(&tantivy_directory, source))?;
+    use tantivy::directory::Directory;
+    index
+        .directory()
+        .sync_directory()
+        .map_err(|source| io_error(&tantivy_directory, source))?;
+    drop(index);
+    #[cfg(not(windows))]
+    sync_tantivy(&tantivy_directory)?;
+    sync_directory(temporary_directory).map_err(|source| io_error(temporary_directory, source))?;
+    Ok(())
+}
+
+fn validate_generation(
+    manager: &IndexManager,
+    id: &GenerationId,
+) -> Result<GenerationReader, MemexError> {
+    let directory = generation_directory(manager, id);
+    require_directory(&directory, "generation directory is missing or not a directory")?;
+    let docs_path = directory.join("docs.ndjson");
+    let docs = read_regular_file(&docs_path)?;
+    let records = decode_ndjson(&docs).map_err(|source| {
+        invalid_generation(&docs_path, format!("docs.ndjson is invalid: {source}"))
+    })?;
+    let manifest_path = directory.join("manifest.json");
+    let manifest_bytes = read_regular_file(&manifest_path)?;
+    let manifest = decode_manifest_at(&manifest_path, &manifest_bytes)?;
+    let expected_docs_hash = sha256_hex(&docs);
+    if manifest.id != *id {
+        return Err(invalid_generation(
+            &manifest_path,
+            "manifest id does not match the requested generation",
+        ));
+    }
+    if manifest.docs_sha256 != expected_docs_hash {
+        return Err(invalid_generation(
+            &manifest_path,
+            "manifest docs_sha256 does not match docs.ndjson",
+        ));
+    }
+    if manifest.doc_count != records.len() as u64 {
+        return Err(invalid_generation(
+            &manifest_path,
+            "manifest doc_count does not match docs.ndjson",
+        ));
+    }
+    if manifest.schema != GENERATION_SCHEMA
+        || manifest.contract_version != GENERATION_CONTRACT_VERSION
+        || manifest.index_profile != INDEX_PROFILE
+    {
+        return Err(invalid_generation(
+            &manifest_path,
+            "manifest constants do not match the v2 contract",
+        ));
+    }
+    if generation_id_from_components(&manifest.contract_version, &manifest.index_profile, &docs)
+        != *id
+    {
+        return Err(invalid_generation(
+            &manifest_path,
+            "manifest id does not match framed generation inputs",
+        ));
+    }
+
+    let tantivy_directory = directory.join("tantivy");
+    require_directory(&tantivy_directory, "Tantivy directory is missing")?;
+    let index = Index::open_in_dir(&tantivy_directory)
+        .map_err(|source| tantivy_error(&tantivy_directory, source))?;
+    if index.schema() != build_schema() {
+        return Err(tantivy_error(
+            &tantivy_directory,
+            "index schema does not match tantivy-central-v2",
+        ));
+    }
+    let metas = index
+        .load_metas()
+        .map_err(|source| tantivy_error(&tantivy_directory, source))?;
+    let expected_payload = format!("{{\"index_profile\":\"{INDEX_PROFILE}\"}}");
+    if metas.payload.as_deref() != Some(expected_payload.as_str()) {
+        return Err(tantivy_error(
+            &tantivy_directory,
+            "last Tantivy commit payload does not match index profile",
+        ));
+    }
+    let committed_count = metas
+        .segments
+        .iter()
+        .map(|segment| u64::from(segment.num_docs()))
+        .sum::<u64>();
+    if committed_count != manifest.doc_count {
+        return Err(tantivy_error(
+            &tantivy_directory,
+            "committed Tantivy document count does not match docs.ndjson",
+        ));
+    }
+    let corrupt_files = index
+        .validate_checksum()
+        .map_err(|source| tantivy_error(&tantivy_directory, source))?;
+    if !corrupt_files.is_empty() {
+        return Err(tantivy_error(
+            &tantivy_directory,
+            format!("Tantivy checksum validation failed for {} files", corrupt_files.len()),
+        ));
+    }
+    register_analyzers(&index);
+    Ok(GenerationReader {
+        id: id.clone(),
+        manifest,
+        index,
+    })
+}
+
+fn generation_id(docs: &[u8]) -> GenerationId {
+    generation_id_from_components(GENERATION_CONTRACT_VERSION, INDEX_PROFILE, docs)
+}
+
+fn generation_id_from_components(contract_version: &str, index_profile: &str, docs: &[u8]) -> GenerationId {
+    let mut hasher = Sha256::new();
+    for component in [contract_version.as_bytes(), index_profile.as_bytes(), docs] {
+        hasher.update((component.len() as u64).to_be_bytes());
+        hasher.update(component);
+    }
+    GenerationId::from_digest(hex_lower(&hasher.finalize()))
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+fn parse_current(bytes: &[u8], path: &Path) -> Result<GenerationId, MemexError> {
+    if bytes.len() != 65 || bytes.last() != Some(&b'\n') || bytes[..64].contains(&b'\n') {
+        return Err(invalid_generation(
+            path,
+            "CURRENT must contain exactly one generation id and one LF",
+        ));
+    }
+    let value = std::str::from_utf8(&bytes[..64])
+        .map_err(|_| invalid_generation(path, "CURRENT is not UTF-8"))?;
+    GenerationId::parse(value).map_err(|_| invalid_generation(path, "CURRENT names an invalid generation"))
+}
+
+fn generation_directory(manager: &IndexManager, id: &GenerationId) -> PathBuf {
+    manager.root.join(GENERATIONS_DIRECTORY).join(id.as_str())
+}
+
+fn temporary_generation_directory(generations: &Path, id: &GenerationId) -> PathBuf {
+    let sequence = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+    generations.join(format!(
+        "{TEMP_GENERATION_PREFIX}{}-{}-{}.{}",
+        id,
+        std::process::id(),
+        sequence,
+        TEMP_GENERATION_SUFFIX.trim_start_matches('.')
+    ))
+}
+
+fn temporary_current_path(root: &Path) -> PathBuf {
+    let sequence = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+    root.join(format!(
+        "{TEMP_CURRENT_PREFIX}{}-{}.{}",
+        std::process::id(),
+        sequence,
+        TEMP_CURRENT_SUFFIX.trim_start_matches('.')
+    ))
+}
+
+fn cleanup_interrupted_temps(generations: &Path) {
+    let Ok(entries) = fs::read_dir(generations) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name.starts_with(TEMP_GENERATION_PREFIX) && name.ends_with(TEMP_GENERATION_SUFFIX) {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+}
+
+fn require_directory(path: &Path, message: &str) -> Result<(), MemexError> {
+    let metadata = fs::symlink_metadata(path).map_err(|source| {
+        if source.kind() == std::io::ErrorKind::NotFound {
+            invalid_generation(path, message)
+        } else {
+            io_error(path, source)
+        }
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(invalid_generation(path, message));
+    }
+    Ok(())
+}
+
+fn read_regular_file(path: &Path) -> Result<Vec<u8>, MemexError> {
+    let metadata = fs::symlink_metadata(path).map_err(|source| io_error(path, source))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(invalid_generation(path, "expected a regular file"));
+    }
+    fs::read(path).map_err(|source| io_error(path, source))
+}
+
+fn write_file_sync(path: &Path, bytes: &[u8]) -> Result<(), MemexError> {
+    let mut file = File::create(path).map_err(|source| io_error(path, source))?;
+    file.write_all(bytes).map_err(|source| io_error(path, source))?;
+    file.sync_all().map_err(|source| io_error(path, source))
+}
+
+fn sync_tantivy(path: &Path) -> Result<(), MemexError> {
+    let entries = fs::read_dir(path).map_err(|source| io_error(path, source))?;
+    for entry in entries {
+        let entry = entry.map_err(|source| io_error(path, source))?;
+        let child = entry.path();
+        let metadata = fs::symlink_metadata(&child).map_err(|source| io_error(&child, source))?;
+        if metadata.file_type().is_symlink() {
+            return Err(invalid_generation(&child, "Tantivy tree contains a symlink"));
+        }
+        if metadata.is_dir() {
+            sync_tantivy(&child)?;
+        } else if metadata.is_file() {
+            File::open(&child)
+                .map_err(|source| io_error(&child, source))?
+                .sync_all()
+                .map_err(|source| io_error(&child, source))?;
+        }
+    }
+    sync_directory(path).map_err(|source| io_error(path, source))
+}
+
+fn sync_directory(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        File::open(path)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
+fn atomic_replace(source: &Path, target: &Path) -> Result<(), MemexError> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+        };
+        let source_wide = source.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
+        let target_wide = target.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
+        // SAFETY: both vectors are NUL-terminated UTF-16 paths that remain
+        // alive for the duration of the system call; MoveFileExW does not
+        // retain either pointer.
+        let result = unsafe {
+            MoveFileExW(
+                source_wide.as_ptr(),
+                target_wide.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if result == 0 {
+            return Err(io_error(target, std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(source, target).map_err(|source_error| io_error(target, source_error))
+    }
+}
+
+fn restore_current(root: &Path, current: &Path, previous: Option<&[u8]>) -> Result<(), MemexError> {
+    match previous {
+        Some(bytes) => {
+            let temporary = temporary_current_path(root);
+            let result = write_file_sync(&temporary, bytes)
+                .and_then(|_| atomic_replace(&temporary, current));
+            let _ = fs::remove_file(&temporary);
+            result
+        }
+        None => fs::remove_file(current)
+            .map_err(|source| io_error(current, source)),
+    }
+}
+
+fn io_error(path: &Path, source: std::io::Error) -> MemexError {
+    MemexError::Io {
+        path: path.to_path_buf(),
+        message: source.to_string(),
+    }
+}
+
+fn invalid_generation(path: &Path, message: impl Into<String>) -> MemexError {
+    MemexError::InvalidGeneration {
+        path: path.to_path_buf(),
+        message: message.into(),
+    }
+}
+
+fn tantivy_error(path: &Path, source: impl ToString) -> MemexError {
+    MemexError::Tantivy {
+        path: path.to_path_buf(),
+        message: source.to_string(),
+    }
+}
