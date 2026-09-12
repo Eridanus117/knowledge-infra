@@ -10,9 +10,11 @@ use kb_contract::{
     parse_and_validate_note, render_note, resolve_registry,
 };
 use std::ffi::OsStr;
-use std::fs;
-use std::io::Write;
 use std::fmt;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 const INVALID_SOURCE: &str = "KBV2-ADOPT-SOURCE";
@@ -314,6 +316,13 @@ pub fn plan_adopt(request: &AdoptRequest) -> Result<AdoptPlan, AdoptError> {
 }
 
 pub fn apply_adopt(plan: &AdoptPlan) -> Result<(), AdoptError> {
+    apply_adopt_with_hook(plan, |_| Ok(()))
+}
+
+pub fn apply_adopt_with_hook<F>(plan: &AdoptPlan, hook: F) -> Result<(), AdoptError>
+where
+    F: FnOnce(&Path) -> Result<(), AdoptError>,
+{
     let current_registry = read_registry(&plan.registry).map_err(|source| AdoptError::Io {
         path: plan.registry.clone(),
         source,
@@ -409,6 +418,19 @@ pub fn apply_adopt(plan: &AdoptPlan) -> Result<(), AdoptError> {
             ));
         }
         gate_created = true;
+    }
+    if plan.gate.is_some() {
+        if let Err(error) = hook(&plan.repo) {
+            return Err(rollback_or_preserve(
+                plan,
+                &created_dirs,
+                registry_changed,
+                human_index_created,
+                index_created,
+                gate_created,
+                error,
+            ));
+        }
     }
     debug_assert!(!gate_created || plan.gate.is_some());
     Ok(())
@@ -751,7 +773,26 @@ fn git_repository_root(path: &Path) -> Option<PathBuf> {
     }
 }
 fn read_registry(path: &Path) -> std::io::Result<Vec<u8>> {
-    read_regular_file_nofollow_bounded(path, 16 * 1024 * 1024)
+    const MAX_REGISTRY_BYTES: usize = 16 * 1024 * 1024;
+    let link_metadata = fs::symlink_metadata(path)?;
+    if !link_metadata.is_file() && !link_metadata.file_type().is_symlink() {
+        return Err(std::io::ErrorKind::InvalidData.into());
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NONBLOCK);
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::ErrorKind::InvalidData.into());
+    }
+    let mut bytes = Vec::new();
+    file.take((MAX_REGISTRY_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_REGISTRY_BYTES {
+        return Err(std::io::ErrorKind::InvalidData.into());
+    }
+    Ok(bytes)
 }
 fn toml_quote(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")

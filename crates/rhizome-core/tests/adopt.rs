@@ -1,4 +1,7 @@
-use rhizome_core::adopt::{AdoptRequest, apply_adopt, plan_adopt};
+use kb_contract::Diagnostic;
+use rhizome_core::adopt::{
+    AdoptRequest, apply_adopt, apply_adopt_with_hook, plan_adopt,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -253,4 +256,41 @@ fn adoption_rolls_back_registry_files_and_new_directories_on_gate_failure() {
     assert!(!repo.join("INDEX.md").exists());
     assert!(!repo.join("docs/INDEX.md").exists());
     assert!(repo.join("lefthook.yml").is_dir());
+}
+
+#[test]
+fn adoption_hook_failure_rolls_back_all_new_source_files() {
+    let scratch = Scratch::new();
+    let registry_path = registry(scratch.path());
+    let registry_before = fs::read(&registry_path).expect("registry should be readable");
+    let repo = scratch.path().join("new-repo");
+    init_git(&repo);
+
+    let request = AdoptRequest {
+        registry: registry_path.clone(),
+        logical_source: "knowledge".into(),
+        repo: repo.clone(),
+        description: "hook failure".into(),
+        keywords: vec!["source".into()],
+    };
+    let plan = plan_adopt(&request).expect("adoption should produce a plan");
+    let error = apply_adopt_with_hook(&plan, |_| {
+        Err(rhizome_core::adopt::AdoptError::Diagnostics(vec![
+            Diagnostic::error("KBV2-TEST-HOOK", "test hook failed"),
+        ]))
+    })
+    .expect_err("hook failure should fail adoption");
+    assert!(
+        error
+            .into_diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "KBV2-TEST-HOOK")
+    );
+    assert_eq!(
+        fs::read(&registry_path).expect("registry should remain readable"),
+        registry_before
+    );
+    assert!(!repo.join("INDEX.md").exists());
+    assert!(!repo.join("docs/INDEX.md").exists());
+    assert!(!repo.join("lefthook.yml").exists());
 }
