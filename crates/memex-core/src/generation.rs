@@ -98,7 +98,9 @@ pub fn build_generation(
     drop(lease);
     if let Err(source) = fs::remove_file(&lease_path) {
         let _ = fs::remove_dir_all(&temporary_directory);
-        let _ = fs::remove_dir_all(&final_directory);
+        if rename_result.is_ok() {
+            let _ = fs::remove_dir_all(&final_directory);
+        }
         return Err(io_error(&lease_path, source));
     }
     match rename_result {
