@@ -1,10 +1,10 @@
-use memex_core::{DOCUMENT_SCHEMA, DocumentRecord};
 use memex_core::tantivy_schema::{
-    FIELD_COMPILED_HASH, FIELD_CONTENT, FIELD_DESCRIPTION, FIELD_DOMAIN, FIELD_DOMAIN_PREFIXES,
-    FIELD_IDENTITY, FIELD_KEYWORDS, FIELD_KIND, FIELD_SOURCE, FIELD_SOURCE_HASH, FIELD_SOURCE_PATH,
-    FIELD_STATUS, FIELD_TITLE, FIELD_BODY, INDEX_PROFILE, IndexProfile, build_schema,
-    build_tantivy,
+    FIELD_BODY, FIELD_COMPILED_HASH, FIELD_CONTENT, FIELD_DESCRIPTION, FIELD_DOMAIN,
+    FIELD_DOMAIN_PREFIXES, FIELD_IDENTITY, FIELD_KEYWORDS, FIELD_KIND, FIELD_SOURCE,
+    FIELD_SOURCE_HASH, FIELD_SOURCE_PATH, FIELD_STATUS, FIELD_TITLE, INDEX_PROFILE, IndexProfile,
+    build_schema, build_tantivy,
 };
+use memex_core::{DOCUMENT_SCHEMA, DocumentRecord};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -61,7 +61,10 @@ fn record(
         identity: identity.to_owned(),
         source: source.to_owned(),
         domain: domain.to_owned(),
-        domain_prefixes: domain_prefixes.iter().map(|value| (*value).to_owned()).collect(),
+        domain_prefixes: domain_prefixes
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect(),
         title: title.to_owned(),
         description: description.to_owned(),
         keywords: keywords.iter().map(|value| (*value).to_owned()).collect(),
@@ -222,7 +225,9 @@ fn field_boosts_produce_observable_title_identity_path_content_order() {
 }
 
 fn field(schema: &tantivy::schema::Schema, name: &str) -> tantivy::schema::Field {
-    schema.get_field(name).unwrap_or_else(|_| panic!("missing field {name}"))
+    schema
+        .get_field(name)
+        .unwrap_or_else(|_| panic!("missing field {name}"))
 }
 
 #[test]
@@ -285,7 +290,9 @@ fn central_index_persists_profile_and_stores_document_record_once() {
     let reader = index.reader().expect("index reader should open");
     let searcher = reader.searcher();
     let parser = QueryParser::for_index(&index, vec![content]);
-    let query = parser.parse_query("中央索引").expect("content query should parse");
+    let query = parser
+        .parse_query("中央索引")
+        .expect("content query should parse");
     let hit = searcher
         .search(&query, &TopDocs::with_limit(1).order_by_score())
         .expect("content query should search")
@@ -295,13 +302,19 @@ fn central_index_persists_profile_and_stores_document_record_once() {
     let document = searcher
         .doc::<TantivyDocument>(hit.1)
         .expect("stored document should load");
-    assert_eq!(document.get_first(identity).unwrap().as_str(), Some("knowledge:alpha:search-guide"));
-    assert_eq!(document.get_first(content).unwrap().as_str(),
-        Some("中文检索\n\ntantivy fixture\n\n# 搜索指南\n中央索引。"));
+    assert_eq!(
+        document.get_first(identity).unwrap().as_str(),
+        Some("knowledge:alpha:search-guide")
+    );
+    assert_eq!(
+        document.get_first(content).unwrap().as_str(),
+        Some("中文检索\n\ntantivy fixture\n\n# 搜索指南\n中央索引。")
+    );
 
     drop(reader);
     drop(index);
-    let reopened = Index::open_in_dir(scratch.path()).expect("persistent central index should reopen");
+    let reopened =
+        Index::open_in_dir(scratch.path()).expect("persistent central index should reopen");
     assert_eq!(reopened.schema(), build_schema());
 }
 
@@ -323,7 +336,9 @@ fn query_parser_boosts_title_content_identity_and_source_path() {
 
     let query_text = include_str!("../../../fixtures/memex/lexical/rank.query").trim();
     let expected_identity = include_str!("../../../fixtures/memex/lexical/rank.expected").trim();
-    let query = parser.parse_query(query_text).expect("Chinese query should parse");
+    let query = parser
+        .parse_query(query_text)
+        .expect("Chinese query should parse");
     let reader = index.reader().expect("index reader should open");
     let hits = reader
         .searcher()
@@ -359,7 +374,11 @@ fn exact_fast_filter_fields_match_only_their_value() {
     for (name, value, expected) in [
         (FIELD_SOURCE, "archive", "archive:alpha:other"),
         (FIELD_DOMAIN, "alpha/deep", "knowledge:alpha/deep:runbook"),
-        (FIELD_DOMAIN_PREFIXES, "alpha/deep", "knowledge:alpha/deep:runbook"),
+        (
+            FIELD_DOMAIN_PREFIXES,
+            "alpha/deep",
+            "knowledge:alpha/deep:runbook",
+        ),
         (FIELD_KIND, "runbook", "knowledge:alpha/deep:runbook"),
         (FIELD_KEYWORDS, "tantivy", "knowledge:alpha:search-guide"),
         (FIELD_STATUS, "frozen", "archive:alpha:other"),

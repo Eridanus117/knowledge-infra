@@ -1,6 +1,8 @@
 use jieba_rs::Jieba;
 use std::sync::{Arc, LazyLock};
-use tantivy::tokenizer::{LowerCaser, SimpleTokenizer, TextAnalyzer, Token, TokenStream, Tokenizer};
+use tantivy::tokenizer::{
+    LowerCaser, SimpleTokenizer, TextAnalyzer, Token, TokenStream, Tokenizer,
+};
 
 /// Stable registration name for the natural-language analyzer.
 pub const NATURAL_V2: &str = "natural_v2";

@@ -3,7 +3,9 @@ use crate::analyzer::{NATURAL_V2, SLUG_V2, natural_v2, slug_v2};
 use std::fmt;
 use std::fs;
 use std::path::Path;
-use tantivy::schema::{IndexRecordOption, Schema, SchemaBuilder, TextFieldIndexing, TextOptions, STORED};
+use tantivy::schema::{
+    IndexRecordOption, STORED, Schema, SchemaBuilder, TextFieldIndexing, TextOptions,
+};
 use tantivy::{Index, TantivyDocument};
 
 /// Stable profile identifier for the central lexical Tantivy index.
@@ -107,14 +109,21 @@ fn natural_text_options() -> TextOptions {
 }
 
 fn slug_text_options(stored: bool, fast: bool) -> TextOptions {
-    let options = TextOptions::default()
-        .set_indexing_options(
-            TextFieldIndexing::default()
-                .set_tokenizer(SLUG_V2)
-                .set_index_option(IndexRecordOption::WithFreqsAndPositions),
-        );
-    let options = if stored { options.set_stored() } else { options };
-    if fast { options.set_fast(None) } else { options }
+    let options = TextOptions::default().set_indexing_options(
+        TextFieldIndexing::default()
+            .set_tokenizer(SLUG_V2)
+            .set_index_option(IndexRecordOption::WithFreqsAndPositions),
+    );
+    let options = if stored {
+        options.set_stored()
+    } else {
+        options
+    };
+    if fast {
+        options.set_fast(None)
+    } else {
+        options
+    }
 }
 
 fn exact_text_options() -> TextOptions {
