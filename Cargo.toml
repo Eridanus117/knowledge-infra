@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/kb-contract", "crates/rhizome-core", "bins/rhizome"]
+members = ["crates/kb-contract", "crates/rhizome-core", "crates/memex-core", "bins/rhizome"]
 resolver = "3"
 
 [workspace.package]

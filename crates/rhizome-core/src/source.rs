@@ -84,6 +84,13 @@ pub struct SourceSnapshot {
     pub notes: Vec<SnapshotNote>,
     pub(crate) source_root: PathBuf,
 }
+impl SourceSnapshot {
+    /// Return the canonical physical root used to derive source-relative paths.
+    #[must_use]
+    pub fn source_root(&self) -> &Path {
+        &self.source_root
+    }
+}
 
 struct OpenedSource {
     root: PathBuf,

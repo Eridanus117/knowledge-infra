@@ -1,0 +1,13 @@
+[package]
+name = "memex-core"
+description = "Deterministic compiled documents and retrieval projections"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+kb-contract.workspace = true
+rhizome-core.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
