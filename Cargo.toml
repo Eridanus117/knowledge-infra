@@ -21,3 +21,5 @@ sha2 = "=0.11.0"
 serde_json = "=1.0.145"
 winapi-util = "=0.1.11"
 unicode-normalization = "=0.1.25"
+tantivy = "=0.26.1"
+jieba-rs = { version = "=0.10.2", default-features = true }
