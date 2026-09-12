@@ -6,10 +6,10 @@ pub mod analyzer;
 pub mod docs_ndjson;
 pub mod document;
 pub mod error;
-pub mod tantivy_schema;
 pub mod generation;
 pub mod lock;
 pub mod manifest;
+pub mod tantivy_schema;
 pub use analyzer::{NATURAL_V2, SLUG_V2, natural_v2, slug_v2};
 
 pub use docs_ndjson::{decode_ndjson, encode_ndjson};
@@ -26,9 +26,7 @@ pub use tantivy_schema::{
     register_analyzers,
 };
 
-pub use generation::{
-    GenerationReader, IndexManager, build_generation, open_current, publish,
-};
+pub use generation::{GenerationReader, IndexManager, build_generation, open_current, publish};
 pub use lock::PublicationLock;
 pub use manifest::{
     GENERATION_CONTRACT_VERSION, GENERATION_SCHEMA, GenerationId, GenerationManifest,

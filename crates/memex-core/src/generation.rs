@@ -7,12 +7,12 @@ use crate::manifest::{
 pub use crate::manifest::{GenerationId, GenerationManifest};
 use crate::tantivy_schema::{INDEX_PROFILE, build_schema, build_tantivy, register_analyzers};
 use crate::{decode_ndjson, encode_ndjson};
-use sha2::{Digest, Sha256};
 use fs4::fs_std::FileExt;
-use std::fs::{self, File, OpenOptions};
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use std::path::{Component, Path, PathBuf};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tantivy::Index;
 
@@ -185,7 +185,9 @@ fn publish_inner(
         let resync = sync(&manager.root).map_err(|error| io_error(&manager.root, error));
         if let Err(rollback_error) = rollback {
             let detail = match resync {
-                Ok(()) => format!("CURRENT sync failed ({source}) and rollback failed: {rollback_error}"),
+                Ok(()) => {
+                    format!("CURRENT sync failed ({source}) and rollback failed: {rollback_error}")
+                }
                 Err(resync_error) => format!(
                     "CURRENT sync failed ({source}), rollback failed: {rollback_error}, and rollback sync failed: {resync_error}"
                 ),
@@ -236,7 +238,10 @@ fn validate_generation(
     id: &GenerationId,
 ) -> Result<GenerationReader, MemexError> {
     let directory = generation_directory(manager, id);
-    require_directory(&directory, "generation directory is missing or not a directory")?;
+    require_directory(
+        &directory,
+        "generation directory is missing or not a directory",
+    )?;
     let docs_path = directory.join("docs.ndjson");
     let docs = read_regular_file(&docs_path)?;
     let records = decode_ndjson(&docs).map_err(|source| {
@@ -321,7 +326,10 @@ fn validate_generation(
     if !corrupt_files.is_empty() {
         return Err(tantivy_error(
             &tantivy_directory,
-            format!("Tantivy checksum validation failed for {} files", corrupt_files.len()),
+            format!(
+                "Tantivy checksum validation failed for {} files",
+                corrupt_files.len()
+            ),
         ));
     }
     register_analyzers(&index);
@@ -336,7 +344,11 @@ fn generation_id(docs: &[u8]) -> GenerationId {
     generation_id_from_components(GENERATION_CONTRACT_VERSION, INDEX_PROFILE, docs)
 }
 
-fn generation_id_from_components(contract_version: &str, index_profile: &str, docs: &[u8]) -> GenerationId {
+fn generation_id_from_components(
+    contract_version: &str,
+    index_profile: &str,
+    docs: &[u8],
+) -> GenerationId {
     let mut hasher = Sha256::new();
     for component in [contract_version.as_bytes(), index_profile.as_bytes(), docs] {
         hasher.update((component.len() as u64).to_be_bytes());
@@ -364,7 +376,8 @@ fn parse_current(bytes: &[u8], path: &Path) -> Result<GenerationId, MemexError> 
     }
     let value = std::str::from_utf8(&bytes[..64])
         .map_err(|_| invalid_generation(path, "CURRENT is not UTF-8"))?;
-    GenerationId::parse(value).map_err(|_| invalid_generation(path, "CURRENT names an invalid generation"))
+    GenerationId::parse(value)
+        .map_err(|_| invalid_generation(path, "CURRENT names an invalid generation"))
 }
 
 fn generation_directory(manager: &IndexManager, id: &GenerationId) -> PathBuf {
@@ -514,10 +527,7 @@ fn read_managed_files(path: &Path) -> Result<HashSet<PathBuf>, MemexError> {
     let mut managed_files = HashSet::with_capacity(entries.len());
     for entry in entries {
         let value = entry.as_str().ok_or_else(|| {
-            tantivy_error(
-                path,
-                "managed metadata must contain only JSON string paths",
-            )
+            tantivy_error(path, "managed metadata must contain only JSON string paths")
         })?;
         let relative = PathBuf::from(value);
         if !managed_files.insert(relative.clone()) {
@@ -556,8 +566,8 @@ fn validate_committed_files(
     for segment in segments {
         for component in tantivy::index::SegmentComponent::iterator() {
             let relative = segment.relative_path(*component);
-            let optional_delete = *component == tantivy::index::SegmentComponent::Delete
-                && !segment.has_deletes();
+            let optional_delete =
+                *component == tantivy::index::SegmentComponent::Delete && !segment.has_deletes();
             if optional_delete && !managed_files.contains(&relative) {
                 continue;
             }
@@ -619,7 +629,8 @@ fn read_regular_file(path: &Path) -> Result<Vec<u8>, MemexError> {
 
 fn write_file_sync(path: &Path, bytes: &[u8]) -> Result<(), MemexError> {
     let mut file = File::create(path).map_err(|source| io_error(path, source))?;
-    file.write_all(bytes).map_err(|source| io_error(path, source))?;
+    file.write_all(bytes)
+        .map_err(|source| io_error(path, source))?;
     file.sync_all().map_err(|source| io_error(path, source))
 }
 
@@ -631,7 +642,10 @@ fn sync_tantivy(path: &Path) -> Result<(), MemexError> {
         let child = entry.path();
         let metadata = fs::symlink_metadata(&child).map_err(|source| io_error(&child, source))?;
         if metadata.file_type().is_symlink() {
-            return Err(invalid_generation(&child, "Tantivy tree contains a symlink"));
+            return Err(invalid_generation(
+                &child,
+                "Tantivy tree contains a symlink",
+            ));
         }
         if metadata.is_dir() {
             sync_tantivy(&child)?;
@@ -664,8 +678,16 @@ fn atomic_replace(source: &Path, target: &Path) -> Result<(), MemexError> {
         use windows_sys::Win32::Storage::FileSystem::{
             MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
         };
-        let source_wide = source.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
-        let target_wide = target.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();
+        let source_wide = source
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        let target_wide = target
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
         // SAFETY: both vectors are NUL-terminated UTF-16 paths that remain
         // alive for the duration of the system call; MoveFileExW does not
         // retain either pointer.
@@ -696,8 +718,7 @@ fn restore_current(root: &Path, current: &Path, previous: Option<&[u8]>) -> Resu
             let _ = fs::remove_file(&temporary);
             result
         }
-        None => fs::remove_file(current)
-            .map_err(|source| io_error(current, source)),
+        None => fs::remove_file(current).map_err(|source| io_error(current, source)),
     }
 }
 
@@ -739,13 +760,14 @@ mod tests {
         ));
         fs::create_dir_all(&root).expect("scratch directory should be created");
         let manager = IndexManager::new(root.clone());
-        let records =
-            decode_ndjson(include_bytes!("../../../fixtures/memex/generation/records.ndjson"))
-                .expect("generation fixture must be canonical");
+        let records = decode_ndjson(include_bytes!(
+            "../../../fixtures/memex/generation/records.ndjson"
+        ))
+        .expect("generation fixture must be canonical");
         let old_id = build_generation(&manager, &records).expect("old generation should build");
         publish(&manager, &old_id).expect("old generation should publish");
-        let new_id =
-            build_generation(&manager, &records[..records.len() - 1]).expect("new generation should build");
+        let new_id = build_generation(&manager, &records[..records.len() - 1])
+            .expect("new generation should build");
         let before = fs::read(root.join(CURRENT_FILENAME)).expect("CURRENT should exist");
         let calls = AtomicUsize::new(0);
         let sync = |path: &Path| {

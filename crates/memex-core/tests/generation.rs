@@ -4,11 +4,11 @@ use memex_core::manifest::{decode_manifest, encode_manifest};
 use memex_core::{DocumentRecord, MemexError, decode_ndjson, encode_ndjson};
 use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
-use tantivy::Index;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tantivy::Index;
 
 static NEXT_SCRATCH: AtomicU64 = AtomicU64::new(0);
 
@@ -44,8 +44,10 @@ impl Drop for ScratchDirectory {
 }
 
 fn fixture_records() -> Vec<DocumentRecord> {
-    decode_ndjson(include_bytes!("../../../fixtures/memex/generation/records.ndjson"))
-        .expect("generation fixture must be canonical")
+    decode_ndjson(include_bytes!(
+        "../../../fixtures/memex/generation/records.ndjson"
+    ))
+    .expect("generation fixture must be canonical")
 }
 
 fn generation_path(manager: &IndexManager, id: &str) -> PathBuf {
@@ -56,7 +58,10 @@ fn current_bytes(manager: &IndexManager) -> Vec<u8> {
     fs::read(manager.root.join("CURRENT")).expect("CURRENT should exist")
 }
 
-fn publish_fixture(manager: &IndexManager, records: &[DocumentRecord]) -> memex_core::generation::GenerationId {
+fn publish_fixture(
+    manager: &IndexManager,
+    records: &[DocumentRecord],
+) -> memex_core::generation::GenerationId {
     let id = build_generation(manager, records).expect("fixture generation should build");
     publish(manager, &id).expect("fixture generation should publish");
     id
@@ -72,13 +77,23 @@ fn deterministic_generation_id_is_order_independent_and_framed() {
     let mut reversed = records.clone();
     reversed.reverse();
 
-    let first_id = build_generation(&first_manager, &records).expect("first generation should build");
-    let second_id = build_generation(&second_manager, &reversed).expect("second generation should build");
+    let first_id =
+        build_generation(&first_manager, &records).expect("first generation should build");
+    let second_id =
+        build_generation(&second_manager, &reversed).expect("second generation should build");
 
     assert_eq!(first_id, second_id);
     assert_eq!(first_id.as_str().len(), 64);
-    assert!(first_id.as_str().bytes().all(|byte| byte.is_ascii_hexdigit()));
-    assert_eq!(first_id.as_str(), include_str!("../../../fixtures/memex/generation/generation.id").trim());
+    assert!(
+        first_id
+            .as_str()
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    );
+    assert_eq!(
+        first_id.as_str(),
+        include_str!("../../../fixtures/memex/generation/generation.id").trim()
+    );
 }
 
 #[test]
@@ -157,7 +172,10 @@ fn interrupted_cleanup_does_not_delete_an_active_builder_lease() {
 
     let id = build_generation(&manager, &fixture_records()).expect("build should proceed");
 
-    assert!(active.exists(), "an active builder temp must not be removed");
+    assert!(
+        active.exists(),
+        "an active builder temp must not be removed"
+    );
     assert!(generation_path(&manager, id.as_str()).is_dir());
     drop(lease_file);
 }
@@ -211,7 +229,10 @@ fn missing_tantivy_commit_cannot_be_published_and_current_stays_byte_identical()
 
     assert!(error.to_string().contains("Tantivy") || error.to_string().contains("tantivy"));
     assert_eq!(current_bytes(&manager), before);
-    assert_eq!(fs::read_to_string(manager.root.join("CURRENT")).unwrap(), format!("{old_id}\n"));
+    assert_eq!(
+        fs::read_to_string(manager.root.join("CURRENT")).unwrap(),
+        format!("{old_id}\n")
+    );
 }
 
 #[test]
@@ -275,7 +296,10 @@ fn duplicate_tantivy_managed_metadata_entry_cannot_be_published() {
     let canonical = fs::read(&managed_path).unwrap();
     let mut entries: Vec<serde_json::Value> =
         serde_json::from_slice(&canonical).expect("managed metadata should be an array");
-    let first = entries.first().cloned().expect("managed metadata should not be empty");
+    let first = entries
+        .first()
+        .cloned()
+        .expect("managed metadata should not be empty");
     entries.push(first);
     let mut duplicate = serde_json::to_vec(&entries).unwrap();
     duplicate.push(b'\n');
@@ -352,7 +376,9 @@ fn concurrent_publishers_leave_only_a_complete_old_or_new_snapshot() {
     assert!(left_result.is_ok() || left_result.as_ref().is_err_and(is_lock_contention));
     assert!(right_result.is_ok() || right_result.as_ref().is_err_and(is_lock_contention));
     let current = current_bytes(&manager);
-    assert!(current == format!("{old_id}\n").as_bytes() || current == format!("{new_id}\n").as_bytes());
+    assert!(
+        current == format!("{old_id}\n").as_bytes() || current == format!("{new_id}\n").as_bytes()
+    );
     let reader = open_current(&manager).expect("CURRENT must name a complete generation");
     assert!(reader.id == old_id || reader.id == new_id);
 }
@@ -394,7 +420,10 @@ fn windows_current_replacement_replaces_existing_file_atomically() {
 
     publish(&manager, &new_id).expect("Windows replacement should succeed");
 
-    assert_eq!(fs::read_to_string(manager.root.join("CURRENT")).unwrap(), format!("{new_id}\n"));
+    assert_eq!(
+        fs::read_to_string(manager.root.join("CURRENT")).unwrap(),
+        format!("{new_id}\n")
+    );
     assert_ne!(old_id, new_id);
 }
 
@@ -408,7 +437,10 @@ fn current_and_previous_generations_are_retained() {
         .expect("second generation should build");
     publish(&manager, &new_id).expect("second generation should publish");
 
-    assert_eq!(fs::read_to_string(manager.root.join("CURRENT")).unwrap(), format!("{new_id}\n"));
+    assert_eq!(
+        fs::read_to_string(manager.root.join("CURRENT")).unwrap(),
+        format!("{new_id}\n")
+    );
     assert!(generation_path(&manager, old_id.as_str()).exists());
     assert!(generation_path(&manager, new_id.as_str()).exists());
     assert_eq!(open_current(&manager).unwrap().id, new_id);

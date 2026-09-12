@@ -85,22 +85,42 @@ impl fmt::Display for MemexError {
                 write!(formatter, "non-canonical NDJSON at line {line}")
             }
             Self::InvalidManifest { path, message } => {
-                write!(formatter, "invalid generation manifest at {}: {message}", path.display())
+                write!(
+                    formatter,
+                    "invalid generation manifest at {}: {message}",
+                    path.display()
+                )
             }
             Self::InvalidGeneration { path, message } => {
-                write!(formatter, "invalid generation at {}: {message}", path.display())
+                write!(
+                    formatter,
+                    "invalid generation at {}: {message}",
+                    path.display()
+                )
             }
             Self::Tantivy { path, message } => {
-                write!(formatter, "invalid Tantivy index at {}: {message}", path.display())
+                write!(
+                    formatter,
+                    "invalid Tantivy index at {}: {message}",
+                    path.display()
+                )
             }
             Self::Io { path, message } => {
-                write!(formatter, "generation I/O failed at {}: {message}", path.display())
+                write!(
+                    formatter,
+                    "generation I/O failed at {}: {message}",
+                    path.display()
+                )
             }
             Self::LockContended { path } => {
                 write!(formatter, "publication lock is held: {}", path.display())
             }
             Self::Lock { path, message } => {
-                write!(formatter, "publication lock failed at {}: {message}", path.display())
+                write!(
+                    formatter,
+                    "publication lock failed at {}: {message}",
+                    path.display()
+                )
             }
         }
     }

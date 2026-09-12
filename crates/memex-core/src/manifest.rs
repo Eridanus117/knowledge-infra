@@ -99,11 +99,7 @@ pub fn encode_manifest(manifest: &GenerationManifest) -> Result<Vec<u8>, MemexEr
     output.extend_from_slice(b"\"doc_count\":");
     output.extend_from_slice(manifest.doc_count.to_string().as_bytes());
     output.push(b',');
-    push_string_field(
-        &mut output,
-        "contract_version",
-        &manifest.contract_version,
-    )?;
+    push_string_field(&mut output, "contract_version", &manifest.contract_version)?;
     output.push(b',');
     push_string_field(&mut output, "index_profile", &manifest.index_profile)?;
     output.extend_from_slice(b"}\n");
@@ -135,7 +131,9 @@ pub fn decode_manifest(bytes: &[u8]) -> Result<GenerationManifest, MemexError> {
             .iter()
             .any(|field| !object.contains_key(*field))
     {
-        return Err(manifest_error("manifest fields do not match the v2 protocol"));
+        return Err(manifest_error(
+            "manifest fields do not match the v2 protocol",
+        ));
     }
 
     let schema = required_string(object, "schema")?;
@@ -181,7 +179,9 @@ fn validate_manifest(manifest: &GenerationManifest) -> Result<(), MemexError> {
         return Err(manifest_error("schema is not tantivy-generation-v2"));
     }
     if manifest.contract_version != GENERATION_CONTRACT_VERSION {
-        return Err(manifest_error("contract_version is not tantivy-generation-v2"));
+        return Err(manifest_error(
+            "contract_version is not tantivy-generation-v2",
+        ));
     }
     if manifest.index_profile != INDEX_PROFILE {
         return Err(manifest_error("index_profile is not tantivy-central-v2"));
@@ -197,7 +197,9 @@ fn validate_digest(value: &str, field: &'static str) -> Result<(), MemexError> {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
-        return Err(manifest_error(format!("{field} must be a lowercase SHA-256 digest")));
+        return Err(manifest_error(format!(
+            "{field} must be a lowercase SHA-256 digest"
+        )));
     }
     Ok(())
 }
