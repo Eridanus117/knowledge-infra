@@ -90,9 +90,9 @@ fn adopt_is_idempotent_and_does_not_rewrite_existing_domain_or_registry_bytes() 
         b"---\ndescription: hand-authored\nkeywords: [keep]\nkind: index\n---\n# Keep\n",
     )
     .expect("existing index should be written");
-    let registry_text = registry_path.to_string_lossy();
+    let registry_text = registry_path.to_string_lossy().replace('\\', "/");
     let hook_before = format!(
-        "pre-commit:\n  commands:\n    existing:\n      run: rhizome check --registry '{registry_text}' -- {{staged_files}}\n"
+        "pre-commit:\n  commands:\n    existing:\n      run: 'rhizome check --registry \"{registry_text}\" -- {{staged_files}}'\n"
     );
     fs::write(repo.join("lefthook.yml"), hook_before.as_bytes())
         .expect("existing gate should be written");
@@ -124,4 +124,133 @@ fn adopt_is_idempotent_and_does_not_rewrite_existing_domain_or_registry_bytes() 
         fs::read(repo.join("lefthook.yml")).expect("gate should remain readable"),
         hook_after_first
     );
+}
+
+#[test]
+fn adoption_uses_discovered_domains_and_does_not_require_a_docs_directory() {
+    let scratch = Scratch::new();
+    let registry_path = registry(scratch.path());
+    let repo = scratch.path().join("existing-repo");
+    init_git(&repo);
+    fs::create_dir_all(repo.join("topic")).expect("domain directory should be created");
+    fs::write(
+        repo.join("topic/INDEX.md"),
+        b"---\ndescription: topic\nkeywords: [topic]\nkind: index\n---\n",
+    )
+    .expect("domain index should be written");
+    fs::write(repo.join("docs"), b"unrelated file").expect("docs file should be written");
+
+    let request = AdoptRequest {
+        registry: registry_path,
+        logical_source: "knowledge".into(),
+        repo: repo.clone(),
+        description: "existing source".into(),
+        keywords: vec!["source".into()],
+    };
+    let plan = plan_adopt(&request).expect("existing C2 domain should be sufficient");
+    assert!(!plan.creates_index(), "existing domains must not create docs skeleton");
+    apply_adopt(&plan).expect("adoption should apply");
+    assert!(!repo.join("docs/INDEX.md").exists());
+}
+
+#[test]
+fn adoption_rejects_another_logical_source_in_the_same_git_repository() {
+    let scratch = Scratch::new();
+    let registry_path = scratch.path().join("sources.toml");
+    let repo = scratch.path().join("existing-repo");
+    init_git(&repo);
+    fs::create_dir_all(repo.join("topic")).expect("domain directory should be created");
+    fs::write(
+        repo.join("topic/INDEX.md"),
+        b"---\ndescription: topic\nkeywords: [topic]\nkind: index\n---\n",
+    )
+    .expect("domain index should be written");
+    fs::write(
+        &registry_path,
+        format!(
+            "[[source]]\nname = \"seed\"\npath = \"{}\"\nsurface = \"core\"\n",
+            repo.join("topic").to_string_lossy().replace('\\', "/")
+        ),
+    )
+    .expect("registry should be written");
+
+    let request = AdoptRequest {
+        registry: registry_path,
+        logical_source: "knowledge".into(),
+        repo,
+        description: "conflict".into(),
+        keywords: vec!["source".into()],
+    };
+    let error = plan_adopt(&request).expect_err("same Git repository must conflict");
+    assert!(
+        error
+            .into_diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "KBV2-ADOPT-SOURCE-CONFLICT")
+    );
+}
+
+#[test]
+fn adoption_does_not_accept_a_skipped_gate_as_active() {
+    let scratch = Scratch::new();
+    let registry_path = registry(scratch.path());
+    let repo = scratch.path().join("existing-repo");
+    init_git(&repo);
+    fs::create_dir_all(repo.join("topic")).expect("domain directory should be created");
+    fs::write(
+        repo.join("topic/INDEX.md"),
+        b"---\ndescription: topic\nkeywords: [topic]\nkind: index\n---\n",
+    )
+    .expect("domain index should be written");
+    let registry_text = registry_path.to_string_lossy().replace('\\', "/");
+    fs::write(
+        repo.join("lefthook.yml"),
+        format!(
+            "pre-commit:\n  commands:\n    rhizome-check:\n      skip: true\n      run: 'rhizome check --registry \"{registry_text}\" -- {{staged_files}}'\n"
+        ),
+    )
+    .expect("gate should be written");
+
+    let request = AdoptRequest {
+        registry: registry_path,
+        logical_source: "knowledge".into(),
+        repo,
+        description: "skipped".into(),
+        keywords: vec!["source".into()],
+    };
+    let error = plan_adopt(&request).expect_err("skipped gate must fail closed");
+    assert!(
+        error
+            .into_diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code == "KBV2-ADOPT-GATE")
+    );
+}
+
+#[test]
+fn adoption_rolls_back_registry_files_and_new_directories_on_gate_failure() {
+    let scratch = Scratch::new();
+    let registry_path = registry(scratch.path());
+    let registry_before = fs::read(&registry_path).expect("registry should be readable");
+    let repo = scratch.path().join("new-repo");
+    init_git(&repo);
+
+    let request = AdoptRequest {
+        registry: registry_path.clone(),
+        logical_source: "knowledge".into(),
+        repo: repo.clone(),
+        description: "rollback".into(),
+        keywords: vec!["source".into()],
+    };
+    let plan = plan_adopt(&request).expect("adoption should produce a plan");
+    fs::create_dir(repo.join("lefthook.yml")).expect("gate collision should be created");
+    let error = apply_adopt(&plan).expect_err("gate collision should fail closed");
+    assert!(!error.into_diagnostics().is_empty());
+    assert_eq!(
+        fs::read(&registry_path).expect("registry should remain readable"),
+        registry_before
+    );
+    assert!(!repo.join("INDEX.md").exists());
+    assert!(!repo.join("docs/INDEX.md").exists());
+    assert!(repo.join("lefthook.yml").is_dir());
 }

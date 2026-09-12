@@ -1,8 +1,8 @@
+use crate::adopt::active_gate;
 use crate::human_index::check_human_index;
 use crate::source::{SourceContext, discover_source, read_regular_file_nofollow_bounded};
 use kb_contract::{Diagnostic, Severity};
-use std::path::{Path, PathBuf};
-
+use std::path::PathBuf;
 /// Stable diagnostics produced by the source-plane doctor command.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DoctorReport {
@@ -145,28 +145,4 @@ pub fn doctor_ok(report: &DoctorReport) -> bool {
         .diagnostics
         .iter()
         .all(|diagnostic| diagnostic.severity == Severity::Warning)
-}
-fn active_gate(text: &str, registry: &Path) -> bool {
-    let expected = format!(
-        "run: rhizome check --registry {} -- {{staged_files}}",
-        shell_quote(&registry.to_string_lossy())
-    );
-    let mut pre_commit = false;
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        if !line.starts_with([' ', '\t']) {
-            pre_commit = trimmed == "pre-commit:";
-            continue;
-        }
-        if pre_commit && trimmed == expected {
-            return true;
-        }
-    }
-    false
-}
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }

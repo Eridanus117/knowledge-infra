@@ -3,17 +3,16 @@ use crate::human_index::check_human_index;
 use crate::source::{
     SourceContext, SourceSnapshot, create_directory_tree_nofollow, create_regular_file_nofollow,
     discover_source, read_regular_file_nofollow_bounded, remove_file_nofollow,
+    write_regular_file_nofollow,
 };
 use kb_contract::{
     Diagnostic, NoteFrontmatter, NoteKind, RegistryLocator, SourceName, SourceSpec, Surface,
     parse_and_validate_note, render_note, resolve_registry,
 };
 use std::ffi::OsStr;
+use std::fs;
+use std::io::Write;
 use std::fmt;
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 const INVALID_SOURCE: &str = "KBV2-ADOPT-SOURCE";
@@ -136,11 +135,9 @@ pub fn plan_adopt(request: &AdoptRequest) -> Result<AdoptPlan, AdoptError> {
             source,
         })?
     };
-    if registry_path
-        .to_string_lossy()
-        .chars()
-        .any(char::is_control)
-        || repo.to_string_lossy().chars().any(char::is_control)
+    if registry_path.to_str().is_none()
+        || repo.to_str().is_none()
+        || !hook_path_safe(&registry_path)
     {
         return Err(diag(PATH_INVALID, PATH_INVALID_MESSAGE, "path"));
     }
@@ -179,20 +176,22 @@ pub fn plan_adopt(request: &AdoptRequest) -> Result<AdoptPlan, AdoptError> {
     let mut registry_after = None;
     if registry.sources.values().any(|existing| {
         existing.name.as_str() != request.logical_source
-            && fs::canonicalize(&existing.root).ok().as_deref() == Some(repo.as_path())
+            && git_repository_root(&existing.root).as_deref() == Some(repo.as_path())
     }) {
         return Err(diag(SOURCE_CONFLICT, SOURCE_CONFLICT_MESSAGE, "source"));
     }
     if let Some(existing) = registry.sources.get(request.logical_source.as_str()) {
-        if fs::canonicalize(&existing.root).ok().as_deref() != Some(repo.as_path()) {
+        if existing.root != repo {
             return Err(diag(SOURCE_CONFLICT, SOURCE_CONFLICT_MESSAGE, "source"));
         }
     } else {
-        let repo_text = repo.to_string_lossy();
+        let repo_text = repo
+            .to_str()
+            .ok_or_else(|| diag(PATH_INVALID, PATH_INVALID_MESSAGE, "path"))?;
         let row = format!(
             "\n[[source]]\nname = \"{}\"\npath = \"{}\"\nsurface = \"core\"\n",
             request.logical_source,
-            toml_quote(&repo_text),
+            toml_quote(repo_text),
         );
         let mut bytes = registry_before.clone();
         if !bytes.ends_with(b"\n") {
@@ -221,47 +220,51 @@ pub fn plan_adopt(request: &AdoptRequest) -> Result<AdoptPlan, AdoptError> {
         registry_origin: registry_path.clone(),
     };
     let discovered = discover_source(&discovery_context).map_err(AdoptError::Diagnostics)?;
-    let has_domain = !discovered.domains.is_empty();
-
-    let docs_path = repo.join("docs");
-    if let Ok(metadata) = fs::symlink_metadata(&docs_path) {
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(diag(REPO, REPO_MESSAGE, "repo"));
+    let index = if discovered.domains.is_empty() {
+        // A source with no discovered C2 domain gets the approved starter domain.
+        // Existing domains are authoritative; never infer a physical path from a
+        // logical domain string or require a conventional `docs` directory.
+        let docs_path = discovered.source_root.join("docs");
+        if let Ok(metadata) = fs::symlink_metadata(&docs_path) {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(diag(REPO, REPO_MESSAGE, "repo"));
+            }
         }
-    }
-    let index_path = docs_path.join("INDEX.md");
-    let index = if exact_entry(&docs_path, "INDEX.md") {
-        let metadata =
-            fs::symlink_metadata(&index_path).map_err(|_| diag(REPO, REPO_MESSAGE, "repo"))?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(diag(REPO, REPO_MESSAGE, "repo"));
+        let index_path = docs_path.join("INDEX.md");
+        if exact_entry(&docs_path, "INDEX.md") {
+            let metadata = fs::symlink_metadata(&index_path)
+                .map_err(|_| diag(REPO, REPO_MESSAGE, "repo"))?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(diag(REPO, REPO_MESSAGE, "repo"));
+            }
+            let bytes = read_regular_file_nofollow_bounded(&index_path, 64 * 1024 * 1024)
+                .map_err(|_| diag(REPO, REPO_MESSAGE, "repo"))?;
+            let note =
+                parse_and_validate_note(&index_path, &bytes).map_err(AdoptError::Diagnostics)?;
+            if note.frontmatter.kind != NoteKind::Index {
+                return Err(diag(REPO, REPO_MESSAGE, "repo"));
+            }
+            None
+        } else {
+            let frontmatter = NoteFrontmatter {
+                description: request.description.clone(),
+                keywords: request.keywords.clone(),
+                kind: NoteKind::Index,
+                links: Vec::new(),
+                code: Vec::new(),
+                assets: Vec::new(),
+                supersedes: None,
+                status: None,
+            };
+            let bytes = render_note(&frontmatter, b"# Docs\n");
+            parse_and_validate_note(&index_path, &bytes).map_err(AdoptError::Diagnostics)?;
+            Some((index_path, bytes))
         }
-        let bytes = read_regular_file_nofollow_bounded(&index_path, 64 * 1024 * 1024)
-            .map_err(|_| diag(REPO, REPO_MESSAGE, "repo"))?;
-        let note = parse_and_validate_note(&index_path, &bytes).map_err(AdoptError::Diagnostics)?;
-        if note.frontmatter.kind != NoteKind::Index {
-            return Err(diag(REPO, REPO_MESSAGE, "repo"));
-        }
-        None
-    } else if has_domain {
-        None
     } else {
-        let frontmatter = NoteFrontmatter {
-            description: request.description.clone(),
-            keywords: request.keywords.clone(),
-            kind: NoteKind::Index,
-            links: Vec::new(),
-            code: Vec::new(),
-            assets: Vec::new(),
-            supersedes: None,
-            status: None,
-        };
-        let bytes = render_note(&frontmatter, b"# Docs\n");
-        parse_and_validate_note(&index_path, &bytes).map_err(AdoptError::Diagnostics)?;
-        Some((index_path, bytes))
+        None
     };
-    let human_index_path = repo.join("INDEX.md");
-    let human_index = if exact_entry(&repo, "INDEX.md") {
+    let human_index_path = discovered.source_root.join("INDEX.md");
+    let human_index = if exact_entry(&discovered.source_root, "INDEX.md") {
         let metadata = fs::symlink_metadata(&human_index_path)
             .map_err(|_| diag(REPO, REPO_MESSAGE, "repo"))?;
         if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -276,7 +279,7 @@ pub fn plan_adopt(request: &AdoptRequest) -> Result<AdoptPlan, AdoptError> {
     } else {
         Some((
             human_index_path,
-            render_human_index(&discovered, &repo).into_bytes(),
+            render_human_index(&discovered).into_bytes(),
         ))
     };
     let gate_path = repo.join("lefthook.yml");
@@ -335,37 +338,33 @@ pub fn apply_adopt(plan: &AdoptPlan) -> Result<(), AdoptError> {
     let mut registry_changed = false;
     let mut human_index_created = false;
     let mut index_created = false;
-    let gate_created = false;
+    let mut gate_created = false;
     let mut created_dirs = Vec::new();
     if let Some(bytes) = &plan.registry_after {
         registry_changed = true;
         if let Err(error) = write_registry(&plan.registry, bytes) {
-            if !rollback_adopt(
+            return Err(rollback_or_preserve(
                 plan,
                 &created_dirs,
                 registry_changed,
                 human_index_created,
                 index_created,
                 gate_created,
-            ) {
-                return Err(diag(GATE_INVALID, "adoption rollback failed", "rollback"));
-            }
-            return Err(error);
+                error,
+            ));
         }
     }
     if let Some((path, bytes)) = &plan.human_index {
         if let Err(error) = create_new(path, bytes) {
-            if !rollback_adopt(
+            return Err(rollback_or_preserve(
                 plan,
                 &created_dirs,
                 registry_changed,
                 human_index_created,
                 index_created,
                 gate_created,
-            ) {
-                return Err(diag(GATE_INVALID, "adoption rollback failed", "rollback"));
-            }
-            return Err(error);
+                error,
+            ));
         }
         human_index_created = true;
     }
@@ -373,49 +372,45 @@ pub fn apply_adopt(plan: &AdoptPlan) -> Result<(), AdoptError> {
         match create_parent_dirs(path) {
             Ok(mut dirs) => created_dirs.append(&mut dirs),
             Err(error) => {
-                if !rollback_adopt(
+                return Err(rollback_or_preserve(
                     plan,
                     &created_dirs,
                     registry_changed,
                     human_index_created,
                     index_created,
                     gate_created,
-                ) {
-                    return Err(diag(GATE_INVALID, "adoption rollback failed", "rollback"));
-                }
-                return Err(error);
+                    error,
+                ));
             }
         }
         if let Err(error) = create_new(path, bytes) {
-            if !rollback_adopt(
+            return Err(rollback_or_preserve(
                 plan,
                 &created_dirs,
                 registry_changed,
                 human_index_created,
                 index_created,
                 gate_created,
-            ) {
-                return Err(diag(GATE_INVALID, "adoption rollback failed", "rollback"));
-            }
-            return Err(error);
+                error,
+            ));
         }
         index_created = true;
     }
     if let Some((path, bytes)) = &plan.gate {
         if let Err(error) = create_new(path, bytes) {
-            if !rollback_adopt(
+            return Err(rollback_or_preserve(
                 plan,
                 &created_dirs,
                 registry_changed,
                 human_index_created,
                 index_created,
                 gate_created,
-            ) {
-                return Err(diag(GATE_INVALID, "adoption rollback failed", "rollback"));
-            }
-            return Err(error);
+                error,
+            ));
         }
+        gate_created = true;
     }
+    debug_assert!(!gate_created || plan.gate.is_some());
     Ok(())
 }
 fn create_new(path: &Path, bytes: &[u8]) -> Result<(), AdoptError> {
@@ -424,8 +419,20 @@ fn create_new(path: &Path, bytes: &[u8]) -> Result<(), AdoptError> {
         source,
     })?;
     if let Err(source) = file.write_all(bytes).and_then(|_| file.sync_all()) {
-        if !remove_if_created(path) {
-            return Err(diag(GATE_INVALID, "adoption rollback failed", "rollback"));
+        if let Err(cleanup) = remove_if_created(path) {
+            let mut diagnostics = AdoptError::Io {
+                path: path.to_path_buf(),
+                source,
+            }
+            .into_diagnostics();
+            diagnostics.extend(
+                AdoptError::Io {
+                    path: path.to_path_buf(),
+                    source: cleanup,
+                }
+                .into_diagnostics(),
+            );
+            return Err(AdoptError::Diagnostics(diagnostics));
         }
         return Err(AdoptError::Io {
             path: path.to_path_buf(),
@@ -435,6 +442,32 @@ fn create_new(path: &Path, bytes: &[u8]) -> Result<(), AdoptError> {
     Ok(())
 }
 
+fn rollback_or_preserve(
+    plan: &AdoptPlan,
+    created_dirs: &[PathBuf],
+    registry_changed: bool,
+    human_index_created: bool,
+    index_created: bool,
+    gate_created: bool,
+    original: AdoptError,
+) -> AdoptError {
+    match rollback_adopt(
+        plan,
+        created_dirs,
+        registry_changed,
+        human_index_created,
+        index_created,
+        gate_created,
+    ) {
+        Ok(()) => original,
+        Err(rollback) => {
+            let mut diagnostics = original.into_diagnostics();
+            diagnostics.extend(rollback.into_diagnostics());
+            AdoptError::Diagnostics(diagnostics)
+        }
+    }
+}
+
 fn rollback_adopt(
     plan: &AdoptPlan,
     created_dirs: &[PathBuf],
@@ -442,44 +475,69 @@ fn rollback_adopt(
     human_index_created: bool,
     index_created: bool,
     gate_created: bool,
-) -> bool {
-    let mut ok = true;
+) -> Result<(), AdoptError> {
+    let mut failures = Vec::new();
+    let mut record_failure = |error: AdoptError| failures.extend(error.into_diagnostics());
     if gate_created {
         if let Some((path, _)) = &plan.gate {
-            ok &= remove_if_created(path);
+            if let Err(source) = remove_if_created(path) {
+                record_failure(AdoptError::Io {
+                    path: path.clone(),
+                    source,
+                });
+            }
         }
     }
     if index_created {
         if let Some((path, _)) = &plan.index {
-            ok &= remove_if_created(path);
+            if let Err(source) = remove_if_created(path) {
+                record_failure(AdoptError::Io {
+                    path: path.clone(),
+                    source,
+                });
+            }
         }
     }
     if human_index_created {
         if let Some((path, _)) = &plan.human_index {
-            ok &= remove_if_created(path);
+            if let Err(source) = remove_if_created(path) {
+                record_failure(AdoptError::Io {
+                    path: path.clone(),
+                    source,
+                });
+            }
         }
     }
     for path in created_dirs.iter().rev() {
         match fs::remove_dir(path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => ok = false,
+            Err(source) => record_failure(AdoptError::Io {
+                path: path.clone(),
+                source,
+            }),
         }
     }
     if registry_changed {
-        ok &= write_registry(&plan.registry, &plan.registry_before).is_ok();
+        if let Err(error) = write_registry(&plan.registry, &plan.registry_before) {
+            record_failure(error);
+        }
     }
-    ok
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(AdoptError::Diagnostics(failures))
+    }
 }
-
-fn remove_if_created(path: &Path) -> bool {
+fn remove_if_created(path: &Path) -> std::io::Result<()> {
     match remove_file_nofollow(path) {
-        Ok(()) => true,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
-        Err(_) => false,
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
-fn render_human_index(snapshot: &SourceSnapshot, root: &Path) -> String {
+fn render_human_index(snapshot: &SourceSnapshot) -> String {
+    let root = &snapshot.source_root;
     let mut output = String::from("<!-- rhizome:generated-index:start -->\n");
     for domain in &snapshot.domains {
         let notes = snapshot
@@ -500,7 +558,7 @@ fn render_human_index(snapshot: &SourceSnapshot, root: &Path) -> String {
                 .strip_prefix(root)
                 .unwrap_or(&note.locator.path)
                 .components()
-                .map(|component| component.as_os_str().to_string_lossy())
+                .filter_map(|component| component.as_os_str().to_str())
                 .collect::<Vec<_>>()
                 .join("/");
             let _ = std::fmt::Write::write_fmt(
@@ -524,65 +582,130 @@ fn exact_entry(parent: &Path, expected: &str) -> bool {
         .any(|entry| entry.file_name() == OsStr::new(expected))
 }
 fn gate_file(registry: &Path) -> String {
-    let path = registry.to_string_lossy().into_owned();
+    let path = hook_path(registry);
     format!(
-        "pre-commit:\n  commands:\n    rhizome-check:\n      run: rhizome check --registry {} -- {{staged_files}}\n",
-        shell_quote(&path)
+        "pre-commit:\n  commands:\n    rhizome-check:\n      run: 'rhizome check --registry \"{path}\" -- {{staged_files}}'\n"
     )
 }
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
+fn hook_path(registry: &Path) -> String {
+    let value = registry.to_str().unwrap_or_default();
+    #[cfg(windows)]
+    {
+        value.replace('\\', "/")
+    }
+    #[cfg(not(windows))]
+    {
+        value.to_owned()
+    }
 }
-fn active_gate(text: &str, registry: &Path) -> bool {
+fn hook_path_safe(registry: &Path) -> bool {
+    registry.to_str().is_some()
+        && hook_path(registry).chars().all(|character| {
+            !character.is_control()
+                && !matches!(
+                    character,
+                    '\'' | '"'
+                        | '$'
+                        | '`'
+                        | '%'
+                        | '&'
+                        | '|'
+                        | '<'
+                        | '>'
+                        | '^'
+                        | '!'
+                        | '\\'
+                        | ';'
+                        | '('
+                        | ')'
+                        | '{'
+                        | '}'
+                        | '['
+                        | ']'
+                        | '*'
+                        | '?'
+                        | '~'
+                        | '#'
+                )
+        })
+}
+
+/// Recognize only the active, registry-bound pre-commit command emitted above.
+pub(crate) fn active_gate(text: &str, registry: &Path) -> bool {
+    if !hook_path_safe(registry) {
+        return false;
+    }
     let expected = format!(
-        "run: rhizome check --registry {} -- {{staged_files}}",
-        shell_quote(&registry.to_string_lossy())
+        "run: 'rhizome check --registry \"{}\" -- {{staged_files}}'",
+        hook_path(registry)
     );
-    let mut pre_commit = false;
+    let mut in_pre_commit = false;
+    let mut pre_commit_count = 0usize;
+    let mut commands_count = 0usize;
+    let mut in_commands = false;
+    let mut in_command = false;
+    let mut run_count = 0usize;
+    let mut disabled = false;
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        if !line.starts_with([' ', '\t']) {
-            pre_commit = trimmed == "pre-commit:";
+        let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
+        if line[..indent].contains('\t') {
+            return false;
+        }
+        if indent == 0 {
+            in_pre_commit = trimmed == "pre-commit:";
+            if in_pre_commit {
+                pre_commit_count += 1;
+            }
+            in_commands = false;
+            in_command = false;
             continue;
         }
-        if pre_commit && trimmed == expected {
-            return true;
+        if !in_pre_commit {
+            continue;
+        }
+        if is_enabled_skip(trimmed) {
+            disabled = true;
+        }
+        match indent {
+            2 => {
+                in_commands = trimmed == "commands:";
+                if in_commands {
+                    commands_count += 1;
+                }
+                in_command = false;
+            }
+            4 if in_commands => {
+                in_command = trimmed.ends_with(':');
+            }
+            6 if in_command && trimmed == expected => {
+                run_count += 1;
+            }
+            _ => {}
         }
     }
-    false
+    pre_commit_count == 1 && commands_count == 1 && run_count == 1 && !disabled
+}
+
+fn is_enabled_skip(line: &str) -> bool {
+    let Some((key, value)) = line.split_once(':') else {
+        return false;
+    };
+    if key.trim() != "skip" {
+        return false;
+    }
+    let value = value.split('#').next().unwrap_or_default().trim();
+    matches!(value, "true" | "True" | "TRUE" | "yes" | "Yes" | "YES" | "on" | "On" | "ON")
 }
 
 fn write_registry(path: &Path, bytes: &[u8]) -> Result<(), AdoptError> {
-    let mut options = OpenOptions::new();
-    options.write(true).truncate(true);
-    #[cfg(unix)]
-    options.custom_flags(libc::O_NONBLOCK);
-    let mut file = options.open(path).map_err(|source| AdoptError::Io {
+    write_regular_file_nofollow(path, bytes).map_err(|source| AdoptError::Io {
         path: path.to_path_buf(),
         source,
-    })?;
-    if !file
-        .metadata()
-        .map_err(|source| AdoptError::Io {
-            path: path.to_path_buf(),
-            source,
-        })?
-        .is_file()
-    {
-        return Err(AdoptError::Io {
-            path: path.to_path_buf(),
-            source: std::io::Error::from(std::io::ErrorKind::InvalidData),
-        });
-    }
-    file.write_all(bytes)
-        .and_then(|_| file.sync_all())
-        .map_err(|source| AdoptError::Io {
-            path: path.to_path_buf(),
-            source,
-        })
+    })
 }
 
 fn create_parent_dirs(path: &Path) -> Result<Vec<PathBuf>, AdoptError> {
@@ -616,23 +739,19 @@ fn valid_source_name(value: &str) -> bool {
     matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
+fn git_repository_root(path: &Path) -> Option<PathBuf> {
+    let mut current = fs::canonicalize(path).ok()?;
+    loop {
+        if let Ok(git) = GitBackend::new(&current) {
+            return Some(git.root().to_path_buf());
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
 fn read_registry(path: &Path) -> std::io::Result<Vec<u8>> {
-    const MAX_REGISTRY_BYTES: usize = 16 * 1024 * 1024;
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    options.custom_flags(libc::O_NONBLOCK);
-    let file = options.open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(std::io::ErrorKind::InvalidData.into());
-    }
-    let mut bytes = Vec::new();
-    file.take((MAX_REGISTRY_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_REGISTRY_BYTES {
-        return Err(std::io::ErrorKind::InvalidData.into());
-    }
-    Ok(bytes)
+    read_regular_file_nofollow_bounded(path, 16 * 1024 * 1024)
 }
 fn toml_quote(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
