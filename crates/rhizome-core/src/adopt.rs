@@ -140,9 +140,18 @@ pub fn plan_adopt(request: &AdoptRequest) -> Result<AdoptPlan, AdoptError> {
     };
     if registry_path.to_str().is_none()
         || repo.to_str().is_none()
+        || repo
+            .to_str()
+            .is_some_and(|path| path.chars().any(char::is_control))
         || !hook_path_safe(&registry_path)
     {
         return Err(diag(PATH_INVALID, PATH_INVALID_MESSAGE, "path"));
+    }
+    if fs::symlink_metadata(&registry_path)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Err(diag(REGISTRY_IO, REGISTRY_IO_MESSAGE, "registry"));
     }
     let registry_before = read_registry(&registry_path).map_err(|source| AdoptError::Io {
         path: registry_path.clone(),
@@ -238,8 +247,8 @@ pub fn plan_adopt(request: &AdoptRequest) -> Result<AdoptPlan, AdoptError> {
         }
         let index_path = docs_path.join("INDEX.md");
         if exact_entry(&docs_path, "INDEX.md") {
-            let metadata = fs::symlink_metadata(&index_path)
-                .map_err(|_| diag(REPO, REPO_MESSAGE, "repo"))?;
+            let metadata =
+                fs::symlink_metadata(&index_path).map_err(|_| diag(REPO, REPO_MESSAGE, "repo"))?;
             if metadata.file_type().is_symlink() || !metadata.is_file() {
                 return Err(diag(REPO, REPO_MESSAGE, "repo"));
             }
@@ -696,6 +705,11 @@ pub(crate) fn active_gate(text: &str, registry: &Path) -> bool {
         if is_enabled_skip(trimmed) {
             disabled = true;
         }
+        if in_command && indent == 6 && trimmed.starts_with("<<:") {
+            // YAML merge keys can inject skip/run values that this strict
+            // line parser cannot safely resolve.
+            return false;
+        }
         match indent {
             2 => {
                 in_commands = trimmed == "commands:";
@@ -836,6 +850,17 @@ mod tests {
 "#;
         assert!(!active_gate(text, registry));
     }
+    #[test]
+    fn active_gate_rejects_unresolved_yaml_merge_keys() {
+        let registry = Path::new("sources.toml");
+        let text = r#"pre-commit:
+  commands:
+    rhizome-check:
+      <<: {skip: true}
+      run: 'rhizome check --registry "sources.toml" -- {staged_files}'
+"#;
+        assert!(!active_gate(text, registry));
+    }
 
     #[test]
     fn plan_adopt_rejects_registry_append_over_reader_limit() {
@@ -850,15 +875,14 @@ mod tests {
         fs::create_dir_all(&root).expect("scratch directory should be created");
         let registry_path = root.join("sources.toml");
         let repo = root.join("repo");
-        let mut registry =
-            br#"workspace_root = "."
+        let mut registry = br#"workspace_root = "."
 
 [[source]]
 name = "seed"
 path = "seed"
 surface = "core"
 "#
-                .to_vec();
+        .to_vec();
         registry.resize(MAX_REGISTRY_BYTES, b'#');
         fs::create_dir_all(root.join("seed")).expect("seed source should be created");
         fs::write(&registry_path, registry).expect("registry should be written");

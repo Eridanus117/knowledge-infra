@@ -1,7 +1,5 @@
 use kb_contract::Diagnostic;
-use rhizome_core::adopt::{
-    AdoptRequest, apply_adopt, apply_adopt_with_hook, plan_adopt,
-};
+use rhizome_core::adopt::{AdoptRequest, apply_adopt, apply_adopt_with_hook, plan_adopt};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -151,7 +149,10 @@ fn adoption_uses_discovered_domains_and_does_not_require_a_docs_directory() {
         keywords: vec!["source".into()],
     };
     let plan = plan_adopt(&request).expect("existing C2 domain should be sufficient");
-    assert!(!plan.creates_index(), "existing domains must not create docs skeleton");
+    assert!(
+        !plan.creates_index(),
+        "existing domains must not create docs skeleton"
+    );
     apply_adopt(&plan).expect("adoption should apply");
     assert!(!repo.join("docs/INDEX.md").exists());
 }

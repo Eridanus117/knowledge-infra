@@ -281,6 +281,10 @@ pub fn apply_relocate(plan: &RelocatePlan) -> Result<(), RelocateError> {
             &target_git,
             std::slice::from_ref(&plan.target_spec),
         )?;
+        crate::frozen::check_staged_frozen_for_specs(
+            &source_git,
+            std::slice::from_ref(&plan.source_spec),
+        )?;
     }
     if source_git.head_oid()? != plan.source_head || target_git.head_oid()? != plan.target_head {
         return Err(RelocateError::Invalid("relocate plan is stale".into()));
@@ -391,6 +395,16 @@ pub fn apply_relocate(plan: &RelocatePlan) -> Result<(), RelocateError> {
     let target_ledger_rel = target_git.relative_path(&target_ledger)?;
     if source_git.head_oid()? != plan.source_head || target_git.head_oid()? != plan.target_head {
         return Err(RelocateError::Invalid("relocate plan became stale".into()));
+    }
+    if source_git.root != target_git.root {
+        crate::frozen::check_staged_target_for_specs(
+            &target_git,
+            std::slice::from_ref(&plan.target_spec),
+        )?;
+        crate::frozen::check_staged_frozen_for_specs(
+            &source_git,
+            std::slice::from_ref(&plan.source_spec),
+        )?;
     }
     let metadata = fs::symlink_metadata(&plan.target_path).ok();
     if metadata.is_some()
@@ -677,7 +691,13 @@ pub fn apply_relocate(plan: &RelocatePlan) -> Result<(), RelocateError> {
     let gate_ok = if source_git.root == target_git.root {
         crate::frozen::check_staged_frozen_for_specs(&source_git, &source_specs).is_ok()
     } else {
-        true
+        crate::frozen::check_staged_frozen_pair(
+            &source_git,
+            std::slice::from_ref(&plan.source_spec),
+            &target_git,
+            std::slice::from_ref(&plan.target_spec),
+        )
+        .is_ok()
     };
     if !gate_ok {
         let rollback = rollback_relocate_staged(

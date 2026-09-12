@@ -3,7 +3,7 @@ use clap::ArgMatches;
 use kb_contract::{
     Diagnostic, NoteFrontmatter, NoteKind, Registry, RegistryLocator, Severity, resolve_registry,
 };
-use rhizome_core::adopt::{AdoptRequest, apply_adopt, plan_adopt};
+use rhizome_core::adopt::{AdoptError, AdoptRequest, apply_adopt_with_hook, plan_adopt};
 use rhizome_core::amend::{apply_amend, plan_amend};
 use rhizome_core::author::{AuthorRequest, apply_author, plan_author};
 use rhizome_core::capture::{CaptureRequest, apply_capture, plan_capture};
@@ -22,6 +22,7 @@ use std::env;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct RunResult {
@@ -352,6 +353,36 @@ fn check_registered_paths(
                 continue;
             }
             Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let backend = match GitBackend::new(&context.git_root) {
+                    Ok(backend) => backend,
+                    Err(error) => {
+                        operation_failed = true;
+                        diagnostics.push(Diagnostic::error("KBV2-GIT", error.to_string()));
+                        continue;
+                    }
+                };
+                match backend.is_staged_deletion(&absolute) {
+                    Ok(true) => {
+                        // A staged deletion has no working-tree file to parse.
+                        // The frozen gate below remains responsible for authorizing it.
+                        rows.push(json!({"path": absolute, "deleted": true}));
+                        continue;
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        operation_failed = true;
+                        diagnostics.push(Diagnostic::error("KBV2-GIT", error.to_string()));
+                        continue;
+                    }
+                }
+                operation_failed = true;
+                diagnostics.push(
+                    Diagnostic::error("KBV2-SOURCE-READ", "source entry could not be read")
+                        .at_path(absolute.clone()),
+                );
+                continue;
+            }
             Err(_) => {
                 operation_failed = true;
                 diagnostics.push(
@@ -570,7 +601,30 @@ fn adopt(args: &ArgMatches) -> RunResult {
         Ok(plan) => plan,
         Err(error) => return RunResult::failure(Value::Null, error.into_diagnostics(), 1),
     };
-    if let Err(error) = apply_adopt(&plan) {
+    let apply_result = apply_adopt_with_hook(&plan, |repo| {
+        let status = Command::new("lefthook")
+            .arg("install")
+            .current_dir(repo)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|_| {
+                AdoptError::Diagnostics(vec![
+                    Diagnostic::error("KBV2-ADOPT-LEFTHOOK", "lefthook install could not be run")
+                        .at_path(repo.to_path_buf()),
+                ])
+            })?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(AdoptError::Diagnostics(vec![
+                Diagnostic::error("KBV2-ADOPT-LEFTHOOK", "lefthook install failed")
+                    .at_path(repo.to_path_buf()),
+            ]))
+        }
+    });
+    if let Err(error) = apply_result {
         return RunResult::failure(Value::Null, error.into_diagnostics(), 1);
     }
     RunResult::success(
@@ -932,8 +986,20 @@ fn load_registry_arg(args: &ArgMatches) -> Result<Registry, Vec<Diagnostic>> {
 
 fn load_registry_with(explicit: Option<PathBuf>) -> Result<Registry, Vec<Diagnostic>> {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let env_path = env::var_os("KB_SOURCES").map(PathBuf::from);
-    let workspace_root = env::var_os("KB_WORKSPACE_ROOT").map(PathBuf::from);
+    let absolutize = |path: PathBuf| {
+        if path.is_absolute() {
+            path
+        } else {
+            cwd.join(path)
+        }
+    };
+    let explicit = explicit.map(&absolutize);
+    let env_path = env::var_os("KB_SOURCES")
+        .map(PathBuf::from)
+        .map(&absolutize);
+    let workspace_root = env::var_os("KB_WORKSPACE_ROOT")
+        .map(PathBuf::from)
+        .map(&absolutize);
     let user_config = env::var_os("HOME")
         .or_else(|| env::var_os("USERPROFILE"))
         .map(PathBuf::from)

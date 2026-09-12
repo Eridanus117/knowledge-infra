@@ -201,6 +201,13 @@ impl GitBackend {
         }
         parse_staged_status(&output.stdout)
     }
+    pub fn is_staged_deletion(&self, path: &Path) -> Result<bool, GitError> {
+        let relative = self.relative_path(path)?;
+        Ok(self.staged_status()?.iter().any(|change| {
+            matches!(change.status.as_bytes().first(), Some(b'D' | b'R' | b'C'))
+                && change.old_path == relative
+        }))
+    }
     pub(crate) fn attributes_clean(&self) -> bool {
         let path = self.absolute_path(".gitattributes");
         self.head_blob(&path).ok() == self.worktree_bytes(&path).ok()

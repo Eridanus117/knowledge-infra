@@ -351,3 +351,52 @@ fn removed_diff_and_old_kb_alias_are_usage_exit_sixty_four() {
     let old = run(&["kb", "check"], Path::new("."), None, None);
     assert_eq!(old.status.code(), Some(64), "old kb alias is removed");
 }
+#[test]
+fn clap_usage_failure_with_json_is_a_single_v2_envelope() {
+    let output = rhizome()
+        .args(["new", "--json", "--unknown"])
+        .output()
+        .expect("rhizome should run");
+    assert_eq!(output.status.code(), Some(64));
+    assert!(output.stderr.is_empty(), "JSON usage errors stay on stdout");
+    let value = stdout_json(&output);
+    assert_eq!(value["schema"], "rhizome-cli-v2");
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["data"], Value::Null);
+    assert_eq!(value["diagnostics"][0]["code"], "KBV2-CLI-USAGE");
+}
+
+#[test]
+fn nested_index_clap_usage_failure_with_json_is_enveloped() {
+    let output = rhizome()
+        .args(["index", "--json"])
+        .output()
+        .expect("rhizome should run");
+    assert_eq!(output.status.code(), Some(64));
+    assert!(output.stderr.is_empty(), "JSON usage errors stay on stdout");
+    let value = stdout_json(&output);
+    assert_eq!(value["schema"], "rhizome-cli-v2");
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["diagnostics"][0]["code"], "KBV2-CLI-USAGE");
+}
+#[test]
+fn registered_missing_path_is_not_treated_as_a_staged_deletion() {
+    let scratch = Scratch::new();
+    let (repo, registry) = source_fixture(&scratch);
+    let missing = repo.join("docs/missing.md");
+    let output = run(
+        &["check", "--json", missing.to_str().expect("UTF-8 path")],
+        scratch.path(),
+        Some(&registry),
+        None,
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let value = stdout_json(&output);
+    assert!(
+        value["diagnostics"]
+            .as_array()
+            .expect("diagnostics array")
+            .iter()
+            .any(|item| item["code"] == "KBV2-SOURCE-READ")
+    );
+}
