@@ -317,3 +317,63 @@ fn document_record_exposes_schema_and_stable_hash_projection() {
     assert!(record.compiled_hash.chars().all(|character| character.is_ascii_hexdigit()));
     let _: &str = record.schema;
 }
+fn recompute_compiled_hash(record: &DocumentRecord) -> String {
+    let json = |value: &str| serde_json::to_string(value).unwrap();
+    let json_list = |value: &[String]| serde_json::to_string(value).unwrap();
+    let json_option = |value: &Option<String>| serde_json::to_string(value).unwrap();
+    let projection = format!(
+        "{{\"schema\":{},\"identity\":{},\"source\":{},\"domain\":{},\"domain_prefixes\":{},\"title\":{},\"description\":{},\"keywords\":{},\"kind\":{},\"kind_explicit\":{},\"status\":{},\"body_text\":{},\"source_path\":{},\"source_hash\":{},\"commit_time\":{}}}",
+        json(record.schema),
+        json(&record.identity),
+        json(&record.source),
+        json(&record.domain),
+        json_list(&record.domain_prefixes),
+        json(&record.title),
+        json(&record.description),
+        json_list(&record.keywords),
+        json(&record.kind),
+        record.kind_explicit,
+        json_option(&record.status),
+        json(&record.body_text),
+        json(&record.source_path),
+        json(&record.source_hash),
+        json_option(&record.commit_time),
+    );
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(projection.as_bytes());
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(hex, "{byte:02x}").unwrap();
+    }
+    hex
+}
+
+#[test]
+fn decode_rejects_domain_prefixes_that_are_not_cumulative_domain_prefixes() {
+    let (_scratch, records) = compiled_records();
+    let mut malformed = records[0].clone();
+    malformed.domain_prefixes = vec!["not-alpha".to_owned()];
+    malformed.compiled_hash = recompute_compiled_hash(&malformed);
+    let original_hash = records[0].compiled_hash.clone();
+    let bytes = String::from_utf8(encode_ndjson(&records).unwrap())
+        .unwrap()
+        .replacen(
+            "\"domain_prefixes\":[\"alpha\"]",
+            "\"domain_prefixes\":[\"not-alpha\"]",
+            1,
+        )
+        .replacen(
+            &format!("\"compiled_hash\":\"{original_hash}\""),
+            &format!("\"compiled_hash\":\"{}\"", malformed.compiled_hash),
+            1,
+        )
+        .into_bytes();
+    assert!(matches!(
+        decode_ndjson(&bytes),
+        Err(MemexError::InvalidDocument {
+            field: "domain_prefixes",
+            ..
+        })
+    ));
+}

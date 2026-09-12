@@ -187,6 +187,13 @@ fn validate_record(record: &DocumentRecord, line: usize) -> Result<(), MemexErro
             "domain prefixes must be non-empty strings",
         ));
     }
+    if record.domain_prefixes != cumulative_domain_prefixes(&record.domain) {
+        return Err(invalid_document(
+            line,
+            "domain_prefixes",
+            "domain prefixes must be the cumulative prefixes of domain",
+        ));
+    }
     if record.title.is_empty() {
         return Err(invalid_document(line, "title", "title must be non-empty"));
     }
@@ -382,4 +389,17 @@ fn optional_string(
 
 fn line_count(bytes: &[u8]) -> usize {
     bytes.iter().filter(|byte| **byte == b'\n').count().max(1)
+}
+
+fn cumulative_domain_prefixes(domain: &str) -> Vec<String> {
+    let mut prefixes = Vec::new();
+    let mut current = String::new();
+    for segment in domain.split('/') {
+        if !current.is_empty() {
+            current.push('/');
+        }
+        current.push_str(segment);
+        prefixes.push(current.clone());
+    }
+    prefixes
 }
