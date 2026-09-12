@@ -17,6 +17,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
+const MAX_REGISTRY_BYTES: usize = 16 * 1024 * 1024;
 const INVALID_SOURCE: &str = "KBV2-ADOPT-SOURCE";
 const INVALID_SOURCE_MESSAGE: &str = "logical source must match ^[a-z][a-z0-9-]*$";
 const WORKTREE: &str = "KBV2-ADOPT-WORKTREE";
@@ -200,6 +201,9 @@ pub fn plan_adopt(request: &AdoptRequest) -> Result<AdoptPlan, AdoptError> {
             bytes.push(b'\n');
         }
         bytes.extend_from_slice(row.trim_start_matches('\n').as_bytes());
+        if bytes.len() > MAX_REGISTRY_BYTES {
+            return Err(diag(REGISTRY_IO, REGISTRY_IO_MESSAGE, "registry"));
+        }
         let valid_toml = std::str::from_utf8(&bytes)
             .ok()
             .and_then(|text| text.parse::<toml::Table>().ok())
@@ -716,11 +720,27 @@ fn is_enabled_skip(line: &str) -> bool {
     let Some((key, value)) = line.split_once(':') else {
         return false;
     };
-    if key.trim() != "skip" {
+    let key = key.trim();
+    if matches!(key, "\"skip\"" | "'skip'") {
+        // Quoted keys are valid YAML, but are outside the narrowly recognized
+        // emitted form. Reject them rather than treating an existing gate as active.
+        return true;
+    }
+    if key != "skip" {
         return false;
     }
     let value = value.split('#').next().unwrap_or_default().trim();
-    matches!(value, "true" | "True" | "TRUE" | "yes" | "Yes" | "YES" | "on" | "On" | "ON")
+    let value = value.strip_prefix("!!bool").unwrap_or(value).trim();
+    if matches!(
+        value,
+        "false" | "False" | "FALSE" | "no" | "No" | "NO" | "off" | "Off" | "OFF"
+    ) {
+        return false;
+    }
+    // A skip key with any other value is either an enabled YAML boolean or
+    // malformed/indirect YAML. Both must fail closed rather than activating
+    // a gate whose command will not run.
+    true
 }
 
 fn write_registry(path: &Path, bytes: &[u8]) -> Result<(), AdoptError> {
@@ -773,7 +793,6 @@ fn git_repository_root(path: &Path) -> Option<PathBuf> {
     }
 }
 fn read_registry(path: &Path) -> std::io::Result<Vec<u8>> {
-    const MAX_REGISTRY_BYTES: usize = 16 * 1024 * 1024;
     let link_metadata = fs::symlink_metadata(path)?;
     if !link_metadata.is_file() && !link_metadata.file_type().is_symlink() {
         return Err(std::io::ErrorKind::InvalidData.into());
@@ -799,4 +818,72 @@ fn toml_quote(value: &str) -> String {
 }
 fn diag(code: &'static str, message: &'static str, field: &'static str) -> AdoptError {
     AdoptError::Diagnostics(vec![Diagnostic::error(code, message).for_field(field)])
+}
+#[cfg(test)]
+mod tests {
+    use super::{MAX_REGISTRY_BYTES, active_gate, plan_adopt};
+    use std::fs;
+    use std::path::Path;
+
+    #[test]
+    fn active_gate_rejects_quoted_skip_key() {
+        let registry = Path::new("sources.toml");
+        let text = r#"pre-commit:
+  commands:
+    rhizome-check:
+      "skip": true
+      run: 'rhizome check --registry "sources.toml" -- {staged_files}'
+"#;
+        assert!(!active_gate(text, registry));
+    }
+
+    #[test]
+    fn plan_adopt_rejects_registry_append_over_reader_limit() {
+        let root = std::env::temp_dir().join(format!(
+            "rhizome-adopt-registry-limit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("scratch directory should be created");
+        let registry_path = root.join("sources.toml");
+        let repo = root.join("repo");
+        let mut registry =
+            br#"workspace_root = "."
+
+[[source]]
+name = "seed"
+path = "seed"
+surface = "core"
+"#
+                .to_vec();
+        registry.resize(MAX_REGISTRY_BYTES, b'#');
+        fs::create_dir_all(root.join("seed")).expect("seed source should be created");
+        fs::write(&registry_path, registry).expect("registry should be written");
+        let status = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(&repo)
+            .status()
+            .expect("git should be installed");
+        assert!(status.success(), "git init should succeed");
+
+        let request = super::AdoptRequest {
+            registry: registry_path,
+            logical_source: "knowledge".into(),
+            repo,
+            description: "size limit".into(),
+            keywords: Vec::new(),
+        };
+        let error = plan_adopt(&request).expect_err("oversized registry append must fail");
+        let diagnostics = error.into_diagnostics();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "KBV2-ADOPT-REGISTRY"),
+            "{diagnostics:?}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
 }
