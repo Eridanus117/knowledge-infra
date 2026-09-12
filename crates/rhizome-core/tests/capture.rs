@@ -117,3 +117,38 @@ fn capture_rejects_empty_thought_without_creating_an_inbox() {
     );
     assert!(!inbox.exists(), "failed capture must not create an inbox");
 }
+
+#[test]
+fn capture_preserves_existing_inbox_bytes_when_appending() {
+    let scratch = Scratch::new();
+    let inbox = scratch.path().join("inbox.md");
+    fs::write(&inbox, b"- earlier capture\n").expect("existing inbox should be written");
+    let request = CaptureRequest {
+        inbox: inbox.clone(),
+        text: "later capture".into(),
+        timestamp: "2026-09-11T12:34:56+00:00".into(),
+    };
+    let plan = plan_capture(&request).expect("capture should produce a typed plan");
+    apply_capture(&plan).expect("capture plan should append");
+    assert_eq!(
+        fs::read(&inbox).expect("inbox should remain readable"),
+        b"- earlier capture\n- 2026-09-11T12:34:56+00:00 later capture\n"
+    );
+}
+#[test]
+fn capture_inserts_separator_for_existing_inbox_without_final_newline() {
+    let scratch = Scratch::new();
+    let inbox = scratch.path().join("inbox.md");
+    fs::write(&inbox, b"- earlier capture").expect("existing inbox should be written");
+    let request = CaptureRequest {
+        inbox: inbox.clone(),
+        text: "later capture".into(),
+        timestamp: "2026-09-11T12:34:56+00:00".into(),
+    };
+    let plan = plan_capture(&request).expect("capture should produce a typed plan");
+    apply_capture(&plan).expect("capture plan should append");
+    assert_eq!(
+        fs::read(&inbox).expect("inbox should remain readable"),
+        b"- earlier capture\n- 2026-09-11T12:34:56+00:00 later capture\n"
+    );
+}

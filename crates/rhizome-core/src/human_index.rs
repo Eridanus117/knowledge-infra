@@ -32,24 +32,27 @@ pub fn check_human_index(
     snapshot: &SourceSnapshot,
     index: &Path,
 ) -> Result<Vec<Diagnostic>, CoreError> {
-    let bytes = read_regular_file_nofollow_bounded(index, 64 * 1024 * 1024).map_err(|source| {
-        CoreError::Io {
-            path: index.to_path_buf(),
+    let (canonical_index, _) = validate_index_root(snapshot, index)?;
+    let bytes = read_regular_file_nofollow_bounded(&canonical_index, 64 * 1024 * 1024).map_err(
+        |source| CoreError::Io {
+            path: canonical_index.clone(),
             source,
-        }
-    })?;
+        },
+    )?;
     let marker = match marker_region(&bytes) {
         Ok(region) => region,
         Err(message) => {
             return Ok(vec![
-                Diagnostic::error(HUMAN_INDEX_MARKER_CODE, message).at_path(diagnostic_path(index)),
+                Diagnostic::error(HUMAN_INDEX_MARKER_CODE, message)
+                    .at_path(diagnostic_path(&canonical_index)),
             ]);
         }
     };
-    let expected = build_replacement(snapshot, index)?;
+    let expected = build_replacement(snapshot, &canonical_index)?;
     if bytes[marker.start..marker.end] != expected {
         return Ok(vec![
-            Diagnostic::error(HUMAN_INDEX_DRIFT_CODE, DRIFT).at_path(diagnostic_path(index)),
+            Diagnostic::error(HUMAN_INDEX_DRIFT_CODE, DRIFT)
+                .at_path(diagnostic_path(&canonical_index)),
         ]);
     }
     Ok(Vec::new())

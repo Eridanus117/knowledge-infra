@@ -390,10 +390,7 @@ pub(crate) fn validate_regular_file_nofollow(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn read_regular_file_nofollow_bounded(
-    path: &Path,
-    max_bytes: usize,
-) -> io::Result<Vec<u8>> {
+pub fn read_regular_file_nofollow_bounded(path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
     let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
     let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
     let directory = open_absolute_dir_nofollow(parent)?;
@@ -410,6 +407,12 @@ pub(crate) fn remove_file_nofollow(path: &Path) -> io::Result<()> {
     let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
     let directory = open_absolute_dir_nofollow(parent)?;
     directory.remove_file_or_symlink(Path::new(name))
+}
+/// Validate every parent component of a selector without following symlinks.
+pub fn validate_parent_path_nofollow(path: &Path) -> io::Result<()> {
+    let parent = path.parent().ok_or(io::ErrorKind::InvalidInput)?;
+    let _ = open_absolute_dir_nofollow(parent)?;
+    Ok(())
 }
 fn has_exact_git_marker(git_root: &Dir) -> io::Result<bool> {
     for entry in git_root.entries()? {

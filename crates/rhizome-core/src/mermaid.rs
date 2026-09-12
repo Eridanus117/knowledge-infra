@@ -1,9 +1,10 @@
 use kb_contract::{Diagnostic, ValidatedNote};
 use serde_json::Value;
 use std::env;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 pub const MERMAID_INVALID_CODE: &str = "KBV2-MERMAID-INVALID";
@@ -41,36 +42,67 @@ pub fn check_mermaid(path: &Path, bytes: &[u8]) -> Vec<Diagnostic> {
         Ok(child) => child,
         Err(_) => return vec![adapter_diagnostic(path)],
     };
-    let write_ok = child
-        .stdin
-        .take()
-        .and_then(|mut stdin| stdin.write_all(request.to_string().as_bytes()).ok());
-    if write_ok.is_none() {
+    let payload = request.to_string();
+    let mut stdout = child.stdout.take().ok_or(()).ok();
+    let Some(mut stdout) = stdout.take() else {
         let _ = child.kill();
         let _ = child.wait();
         return vec![adapter_diagnostic(path)];
-    }
-    let deadline = Instant::now() + ADAPTER_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let output = match child.wait_with_output() {
-                    Ok(output) => output,
-                    Err(_) => return vec![adapter_diagnostic(path)],
-                };
-                if !matches!(status.code(), Some(0) | Some(1)) {
-                    return vec![adapter_diagnostic(path)];
+    };
+    let reader = thread::spawn(move || {
+        const MAX_OUTPUT: usize = 8 * 1024 * 1024;
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 8192];
+        let mut overflow = false;
+        loop {
+            match stdout.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(size) => {
+                    let keep = size.min(MAX_OUTPUT.saturating_sub(bytes.len()));
+                    bytes.extend_from_slice(&buffer[..keep]);
+                    overflow |= keep < size;
                 }
-                return parse_findings(path, &output.stdout);
+                Err(_) => return (bytes, true),
             }
+        }
+        (bytes, overflow)
+    });
+    let (sender, receiver) = mpsc::channel();
+    let stdin = child.stdin.take();
+    let writer = thread::spawn(move || {
+        let ok = stdin
+            .map(|mut stdin| stdin.write_all(payload.as_bytes()).is_ok())
+            .unwrap_or(false);
+        let _ = sender.send(ok);
+    });
+    let deadline = Instant::now() + ADAPTER_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
             Ok(None) | Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = writer.join();
+                let _ = reader.join();
                 return vec![adapter_diagnostic(path)];
             }
         }
+    };
+    if !receiver
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap_or(false)
+    {
+        let _ = writer.join();
+        let _ = reader.join();
+        return vec![adapter_diagnostic(path)];
     }
+    let _ = writer.join();
+    let (output, overflow) = reader.join().unwrap_or((Vec::new(), true));
+    if overflow || !matches!(status.code(), Some(0) | Some(1)) {
+        return vec![adapter_diagnostic(path)];
+    }
+    parse_findings(path, &output)
 }
 
 fn parse_findings(path: &Path, bytes: &[u8]) -> Vec<Diagnostic> {

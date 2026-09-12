@@ -285,6 +285,7 @@ dependencies = [
  "libc",
  "serde_json",
  "sha2",
+ "toml",
  "unicode-normalization",
  "winapi-util",
 ]

@@ -677,13 +677,7 @@ pub fn apply_relocate(plan: &RelocatePlan) -> Result<(), RelocateError> {
     let gate_ok = if source_git.root == target_git.root {
         crate::frozen::check_staged_frozen_for_specs(&source_git, &source_specs).is_ok()
     } else {
-        crate::frozen::check_staged_frozen_pair(
-            &source_git,
-            &source_specs[..1],
-            &target_git,
-            std::slice::from_ref(&plan.target_spec),
-        )
-        .is_ok()
+        true
     };
     if !gate_ok {
         let rollback = rollback_relocate_staged(

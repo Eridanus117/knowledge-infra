@@ -59,6 +59,10 @@ impl GitBackend {
         }
         Ok(backend)
     }
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
 
     pub fn head_oid(&self) -> Result<String, GitError> {
         Ok(self

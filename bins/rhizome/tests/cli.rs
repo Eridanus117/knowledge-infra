@@ -49,6 +49,11 @@ fn source_fixture(scratch: &Scratch) -> (PathBuf, PathBuf) {
         b"---\ndescription: docs\nkeywords: [fixture]\nkind: index\n---\n# Docs\n",
     )
     .expect("domain index should be written");
+    fs::write(
+        repo.join("INDEX.md"),
+        b"<!-- rhizome:generated-index:start -->\n<!-- rhizome:generated-index:end -->",
+    )
+    .expect("human index should be written");
     init_git(&repo);
     let registry = scratch.path().join("sources.toml");
     let repo_text = repo.to_string_lossy().replace('\\', "/");

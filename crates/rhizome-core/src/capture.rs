@@ -1,4 +1,7 @@
-use crate::source::{create_directory_tree_nofollow, open_regular_file_for_append_nofollow};
+use crate::source::{
+    create_directory_tree_nofollow, open_regular_file_for_append_nofollow,
+    read_regular_file_nofollow_bounded,
+};
 use kb_contract::Diagnostic;
 use std::fmt;
 use std::io::Write;
@@ -8,6 +11,8 @@ const EMPTY: &str = "KBV2-CAPTURE-EMPTY";
 const EMPTY_MESSAGE: &str = "capture text must not be empty";
 const INVALID_TIMESTAMP: &str = "KBV2-CAPTURE-TIMESTAMP";
 const INVALID_TIMESTAMP_MESSAGE: &str = "capture timestamp must be one line";
+const STALE: &str = "KBV2-CAPTURE-STALE";
+const STALE_MESSAGE: &str = "capture inbox changed while applying";
 
 /// Input to a raw inbox capture. Capture deliberately has no source or domain context.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -16,11 +21,11 @@ pub struct CaptureRequest {
     pub text: String,
     pub timestamp: String,
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CapturePlan {
     path: PathBuf,
     line: Vec<u8>,
+    before: Option<Vec<u8>>,
 }
 
 impl CapturePlan {
@@ -96,8 +101,19 @@ pub fn plan_capture(request: &CaptureRequest) -> Result<CapturePlan, CaptureErro
             source,
         })?
     };
-    let line = format!("- {} {}\n", request.timestamp, text).into_bytes();
-    Ok(CapturePlan { path, line })
+    let before = match read_regular_file_nofollow_bounded(&path, 64 * 1024 * 1024) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(source) => return Err(CaptureError::Io { path, source }),
+    };
+    let separator = before
+        .as_ref()
+        .is_some_and(|bytes| !bytes.is_empty() && !bytes.ends_with(b"\n"));
+    let mut line = format!("- {} {}\n", request.timestamp, text).into_bytes();
+    if separator {
+        line.insert(0, b'\n');
+    }
+    return Ok(CapturePlan { path, line, before });
 }
 
 /// Append a capture using no-follow file access; parent directories are created as needed.
@@ -111,6 +127,21 @@ pub fn apply_capture(plan: &CapturePlan) -> Result<(), CaptureError> {
         path: parent.to_path_buf(),
         source,
     })?;
+    let current = match read_regular_file_nofollow_bounded(&plan.path, 64 * 1024 * 1024) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(source) => {
+            return Err(CaptureError::Io {
+                path: plan.path.clone(),
+                source,
+            });
+        }
+    };
+    if current != plan.before {
+        return Err(CaptureError::Diagnostics(vec![
+            Diagnostic::error(STALE, STALE_MESSAGE).at_path(plan.path.clone()),
+        ]));
+    }
     let mut file =
         open_regular_file_for_append_nofollow(&plan.path).map_err(|source| CaptureError::Io {
             path: plan.path.clone(),

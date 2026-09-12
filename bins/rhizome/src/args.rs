@@ -38,6 +38,8 @@ fn check_command(name: &'static str) -> Command {
         .about("Check a source or Markdown note")
         .arg(json_arg())
         .arg(source_arg())
+        .arg(Arg::new("registry").long("registry").value_name("PATH"))
+        .arg(Arg::new("all").long("all").action(ArgAction::SetTrue))
         .arg(Arg::new("path").value_name("PATH").num_args(0..))
 }
 fn new_command() -> Command {

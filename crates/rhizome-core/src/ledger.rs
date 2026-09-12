@@ -219,3 +219,43 @@ fn valid_rel_path(value: &str) -> bool {
             part.is_empty() || part == "." || part == ".." || part.chars().any(char::is_control)
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{LedgerRecord, append};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn append_preserves_existing_ledger_history() {
+        let root = std::env::temp_dir().join(format!(
+            "rhizome-ledger-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let record = |old_path: &str| LedgerRecord {
+            schema: "frozen-ledger-v2".into(),
+            operation: "amend".into(),
+            logical_source: "knowledge".into(),
+            old_identity: "knowledge:docs:note".into(),
+            new_identity: "knowledge:docs:note".into(),
+            old_path: old_path.into(),
+            new_path: old_path.into(),
+            head_oid: "0123456789012345678901234567890123456789".into(),
+            canonical_git_blob_sha256:
+                "0123456789012345678901234567890123456789012345678901234567890123".into(),
+            reason: "test".into(),
+        };
+        append(&root, &record("docs/first.md")).unwrap();
+        append(&root, &record("docs/second.md")).unwrap();
+        let text = String::from_utf8(fs::read(root.join(".rhizome/amend-ledger.ndjson")).unwrap())
+            .unwrap();
+        assert_eq!(text.lines().count(), 2);
+        assert!(text.contains("\"old_path\":\"docs/first.md\""));
+        let _ = fs::remove_dir_all(root);
+    }
+}

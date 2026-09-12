@@ -43,6 +43,14 @@ const OVERLAY_FIELD_MESSAGE: &str = "local overlay may override only source.path
 pub struct SourceName(String);
 
 impl SourceName {
+    pub fn new(value: &str) -> Result<Self, Diagnostic> {
+        if valid_source_name(value) {
+            Ok(Self(value.to_owned()))
+        } else {
+            Err(Diagnostic::error(INVALID_NAME, INVALID_NAME_MESSAGE).for_field("source"))
+        }
+    }
+
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -187,10 +195,15 @@ fn open_read_only(path: &Path) -> std::io::Result<File> {
 }
 
 fn read_table(selected: OpenRegistry) -> Result<Table, Diagnostic> {
-    let OpenRegistry { path, mut file } = selected;
+    const MAX_REGISTRY_BYTES: usize = 16 * 1024 * 1024;
+    let OpenRegistry { path, file } = selected;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
+    file.take((MAX_REGISTRY_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
         .map_err(|_| Diagnostic::error(READ, READ_MESSAGE).at_path(path.clone()))?;
+    if bytes.len() > MAX_REGISTRY_BYTES {
+        return Err(Diagnostic::error(READ, READ_MESSAGE).at_path(path));
+    }
     let text = String::from_utf8(bytes)
         .map_err(|_| Diagnostic::error(TOML, TOML_MESSAGE).at_path(path.clone()))?;
     text.parse::<Table>()

@@ -90,9 +90,12 @@ fn adopt_is_idempotent_and_does_not_rewrite_existing_domain_or_registry_bytes() 
         b"---\ndescription: hand-authored\nkeywords: [keep]\nkind: index\n---\n# Keep\n",
     )
     .expect("existing index should be written");
-    let hook_before =
-        b"pre-commit:\n  commands:\n    existing:\n      run: rhizome check -- {staged_files}\n";
-    fs::write(repo.join("lefthook.yml"), hook_before).expect("existing gate should be written");
+    let registry_text = registry_path.to_string_lossy();
+    let hook_before = format!(
+        "pre-commit:\n  commands:\n    existing:\n      run: rhizome check --registry '{registry_text}' -- {{staged_files}}\n"
+    );
+    fs::write(repo.join("lefthook.yml"), hook_before.as_bytes())
+        .expect("existing gate should be written");
 
     let request = AdoptRequest {
         registry: registry_path.clone(),

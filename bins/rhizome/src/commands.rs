@@ -10,11 +10,13 @@ use rhizome_core::capture::{CaptureRequest, apply_capture, plan_capture};
 use rhizome_core::check::{CoreError, check_source};
 use rhizome_core::doctor::doctor_source;
 use rhizome_core::frozen::{ApprovalMarker, check_staged_frozen_for_specs};
-use rhizome_core::git::GitBackend;
+use rhizome_core::git::{GitBackend, GitError};
 use rhizome_core::human_index::{apply_human_index, check_human_index, plan_human_index};
 use rhizome_core::links::check_links_and_code;
 use rhizome_core::relocate::{apply_relocate, plan_relocate};
-use rhizome_core::source::{SourceContext, discover_source, parse_note_file_nofollow};
+use rhizome_core::source::{
+    SourceContext, discover_source, parse_note_file_nofollow, validate_parent_path_nofollow,
+};
 use serde_json::{Value, json};
 use std::env;
 use std::fs;
@@ -143,9 +145,22 @@ fn check(args: &ArgMatches) -> RunResult {
         .map(|paths| paths.map(PathBuf::from).collect::<Vec<_>>())
         .unwrap_or_default();
     let selected = args.get_one::<String>("source").map(String::as_str);
+    if args.get_flag("all") && !paths.is_empty() {
+        return RunResult::failure(
+            Value::Null,
+            vec![Diagnostic::error(
+                "KBV2-CLI-USAGE",
+                "--all cannot be combined with paths",
+            )],
+            64,
+        );
+    }
     if !paths.is_empty() {
-        if env::var_os("KB_SOURCES").is_some() || selected.is_some() {
-            let registry = match load_registry() {
+        if env::var_os("KB_SOURCES").is_some()
+            || selected.is_some()
+            || args.get_one::<String>("registry").is_some()
+        {
+            let registry = match load_registry_arg(args) {
                 Ok(registry) => registry,
                 Err(diagnostics) => return RunResult::failure(Value::Null, diagnostics, 1),
             };
@@ -153,13 +168,13 @@ fn check(args: &ArgMatches) -> RunResult {
         }
         return check_direct_paths(paths);
     }
-    let registry = match load_registry() {
+    let registry = match load_registry_arg(args) {
         Ok(registry) => registry,
         Err(diagnostics) => return RunResult::failure(Value::Null, diagnostics, 1),
     };
     if let Some(source) = selected {
         return context_for(&registry, source)
-            .map(|context| check_context(&context))
+            .map(|context| check_context(&context, &registry))
             .unwrap_or_else(|diagnostics| RunResult::failure(Value::Null, diagnostics, 1));
     }
     check_all_sources(&registry)
@@ -168,6 +183,17 @@ fn check_direct_paths(paths: Vec<PathBuf>) -> RunResult {
     let mut diagnostics = Vec::new();
     let mut contract_failed = false;
     for path in paths {
+        let path = match std::path::absolute(&path) {
+            Ok(path) => path,
+            Err(_) => {
+                contract_failed = true;
+                diagnostics.push(Diagnostic::error(
+                    "KBV2-SOURCE-READ",
+                    "source entry could not be read",
+                ));
+                continue;
+            }
+        };
         match parse_note_file_nofollow(&path) {
             Ok(note) => diagnostics.extend(rhizome_core::mermaid::check_note_mermaid(&path, &note)),
             Err(mut failures) => {
@@ -211,14 +237,11 @@ fn check_all_sources(registry: &Registry) -> RunResult {
                 diagnostics.extend(core_diagnostics(error));
             }
         }
-        if let Ok(backend) = GitBackend::new(&context.git_root) {
-            if backend.head_oid().is_ok() {
-                if let Err(error) =
-                    check_staged_frozen_for_specs(&backend, std::slice::from_ref(&context.source))
-                {
-                    diagnostics.push(Diagnostic::error("KBV2-FROZEN-GATE", error.to_string()));
-                }
+        if let Err((code, diagnostic)) = frozen_gate(&context, registry) {
+            if code == 1 {
+                operation_failed = true;
             }
+            diagnostics.push(diagnostic);
         }
     }
     let data = json!(rows);
@@ -258,6 +281,7 @@ fn check_registered_paths(
     let mut diagnostics = Vec::new();
     let mut rows = Vec::new();
     let mut checked = std::collections::BTreeSet::new();
+    let mut human_checked = std::collections::BTreeSet::new();
     let mut operation_failed = false;
     for path in paths {
         let absolute = match std::path::absolute(&path) {
@@ -271,11 +295,15 @@ fn check_registered_paths(
                 continue;
             }
         };
-        let mut matching = registry.sources.values().filter(|spec| {
-            selected.is_none_or(|name| name == spec.name.as_str())
-                && absolute.starts_with(&spec.root)
-        });
-        let Some(spec) = matching.next() else {
+        let Some(spec) = registry
+            .sources
+            .values()
+            .filter(|spec| {
+                selected.is_none_or(|name| name == spec.name.as_str())
+                    && path_within(&absolute, &spec.root)
+            })
+            .max_by_key(|spec| spec.root.components().count())
+        else {
             rows.push(json!({"path": absolute, "ignored": true}));
             continue;
         };
@@ -296,14 +324,55 @@ fn check_registered_paths(
                 continue;
             }
         };
+        if human_checked.insert(spec.name.to_string()) {
+            let root_index = context.source.root.join("INDEX.md");
+            match check_human_index(&snapshot, &root_index) {
+                Ok(findings) => diagnostics.extend(findings),
+                Err(error) => {
+                    operation_failed = true;
+                    diagnostics.extend(core_diagnostics(error));
+                }
+            }
+        }
+        if validate_parent_path_nofollow(&absolute).is_err() {
+            operation_failed = true;
+            diagnostics.push(
+                Diagnostic::error("KBV2-SOURCE-READ", "source entry could not be read")
+                    .at_path(absolute.clone()),
+            );
+            continue;
+        }
+        match std::fs::symlink_metadata(&absolute) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+                operation_failed = true;
+                diagnostics.push(
+                    Diagnostic::error("KBV2-SOURCE-READ", "source entry could not be read")
+                        .at_path(absolute.clone()),
+                );
+                continue;
+            }
+            Ok(_) => {}
+            Err(_) => {
+                operation_failed = true;
+                diagnostics.push(
+                    Diagnostic::error("KBV2-SOURCE-READ", "source entry could not be read")
+                        .at_path(absolute.clone()),
+                );
+                continue;
+            }
+        }
         let canonical = match std::fs::canonicalize(&absolute) {
             Ok(path) => path,
             Err(_) => {
-                rows.push(json!({"path": absolute, "ignored": true}));
+                operation_failed = true;
+                diagnostics.push(
+                    Diagnostic::error("KBV2-SOURCE-READ", "source entry could not be read")
+                        .at_path(absolute),
+                );
                 continue;
             }
         };
-        if !canonical.starts_with(&context.source.root) {
+        if !path_within(&canonical, &context.source.root) {
             diagnostics.push(
                 Diagnostic::error(
                     "KBV2-SOURCE-OUTSIDE-GIT",
@@ -314,26 +383,41 @@ fn check_registered_paths(
             continue;
         }
         let root_index = context.source.root.join("INDEX.md");
-        let findings = if canonical == root_index {
-            check_human_index(&snapshot, &root_index)
-                .unwrap_or_else(|error| core_diagnostics(error))
-        } else if let Some(note) = snapshot
+        let mut findings = if canonical == root_index {
+            match check_human_index(&snapshot, &root_index) {
+                Ok(findings) => findings,
+                Err(error) => {
+                    operation_failed = true;
+                    core_diagnostics(error)
+                }
+            }
+        } else if snapshot
             .notes
             .iter()
-            .find(|note| note.locator.path == canonical)
+            .any(|note| note.locator.path == canonical)
         {
             let mut findings = check_links_and_code(&snapshot, &context);
-            findings.extend(rhizome_core::mermaid::check_note_mermaid(
-                &note.locator.path,
-                &note.note,
-            ));
+            for snapshot_note in &snapshot.notes {
+                findings.extend(rhizome_core::mermaid::check_note_mermaid(
+                    &snapshot_note.locator.path,
+                    &snapshot_note.note,
+                ));
+            }
             findings
         } else {
             Vec::new()
         };
+        let target_path = canonical.clone();
+        findings.retain(|finding| {
+            finding
+                .path
+                .as_ref()
+                .is_none_or(|path| path == &target_path)
+        });
         diagnostics.extend(findings.clone());
         rows.push(json!({"path": canonical, "findings": findings.iter().map(output::diagnostic_value).collect::<Vec<_>>() }));
     }
+    let mut gated_roots = std::collections::BTreeSet::new();
     for spec in registry
         .sources
         .values()
@@ -342,16 +426,19 @@ fn check_registered_paths(
         if !checked.contains(spec.name.as_str()) {
             continue;
         }
-        if let Ok(context) = context_for_spec(spec, &registry.origin) {
-            if let Ok(backend) = GitBackend::new(&context.git_root) {
-                if backend.head_oid().is_ok() {
-                    if let Err(error) = check_staged_frozen_for_specs(
-                        &backend,
-                        std::slice::from_ref(&context.source),
-                    ) {
-                        diagnostics.push(Diagnostic::error("KBV2-FROZEN-GATE", error.to_string()));
+        match context_for_spec(spec, &registry.origin) {
+            Ok(context) if gated_roots.insert(context.git_root.clone()) => {
+                if let Err((code, diagnostic)) = frozen_gate(&context, registry) {
+                    if code == 1 {
+                        operation_failed = true;
                     }
+                    diagnostics.push(diagnostic);
                 }
+            }
+            Ok(_) => {}
+            Err(mut failures) => {
+                operation_failed = true;
+                diagnostics.append(&mut failures);
             }
         }
     }
@@ -367,27 +454,26 @@ fn check_registered_paths(
     }
 }
 
-fn check_context(context: &SourceContext) -> RunResult {
-    let backend = match GitBackend::new(&context.git_root) {
-        Ok(backend) => backend,
-        Err(error) => {
-            return RunResult::failure(
-                Value::Null,
-                vec![Diagnostic::error("KBV2-GIT", error.to_string())],
-                1,
-            );
-        }
-    };
-    if backend.head_oid().is_ok() {
-        if let Err(error) =
-            check_staged_frozen_for_specs(&backend, std::slice::from_ref(&context.source))
-        {
-            return RunResult::failure(
-                Value::Null,
-                vec![Diagnostic::error("KBV2-FROZEN-GATE", error.to_string())],
-                3,
-            );
-        }
+fn frozen_gate(context: &SourceContext, registry: &Registry) -> Result<(), (i32, Diagnostic)> {
+    let backend = GitBackend::new(&context.git_root)
+        .map_err(|error| (1, Diagnostic::error("KBV2-GIT", error.to_string())))?;
+    match backend.head_oid() {
+        Ok(_) => {}
+        Err(GitError::CommandFailed("rev-parse")) => return Ok(()),
+        Err(error) => return Err((1, Diagnostic::error("KBV2-GIT", error.to_string()))),
+    }
+    let specs = registry
+        .sources
+        .values()
+        .filter(|spec| find_git_root(&spec.root).as_ref() == Some(&context.git_root))
+        .cloned()
+        .collect::<Vec<_>>();
+    check_staged_frozen_for_specs(&backend, &specs)
+        .map_err(|error| (3, Diagnostic::error("KBV2-FROZEN-GATE", error.to_string())))
+}
+fn check_context(context: &SourceContext, registry: &Registry) -> RunResult {
+    if let Err((code, diagnostic)) = frozen_gate(context, registry) {
+        return RunResult::failure(Value::Null, vec![diagnostic], code);
     }
     match check_source(context) {
         Ok(report) => {
@@ -710,7 +796,7 @@ fn amend(args: &ArgMatches) -> RunResult {
             .join(requested_path)
     };
     let path = match std::fs::canonicalize(&path) {
-        Ok(path) if path.starts_with(&spec.root) => path,
+        Ok(path) if path_within(&path, &spec.root) => path,
         _ => {
             return RunResult::failure(
                 Value::Null,
@@ -785,7 +871,7 @@ fn relocate(args: &ArgMatches) -> RunResult {
             .join(requested_path)
     };
     let path = match std::fs::canonicalize(&path) {
-        Ok(path) if path.starts_with(&context.source.root) => path,
+        Ok(path) if path_within(&path, &context.source.root) => path,
         _ => {
             return RunResult::failure(
                 Value::Null,
@@ -837,6 +923,14 @@ fn relocate(args: &ArgMatches) -> RunResult {
 }
 
 fn load_registry() -> Result<Registry, Vec<Diagnostic>> {
+    load_registry_with(None)
+}
+
+fn load_registry_arg(args: &ArgMatches) -> Result<Registry, Vec<Diagnostic>> {
+    load_registry_with(args.get_one::<String>("registry").map(PathBuf::from))
+}
+
+fn load_registry_with(explicit: Option<PathBuf>) -> Result<Registry, Vec<Diagnostic>> {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let env_path = env::var_os("KB_SOURCES").map(PathBuf::from);
     let workspace_root = env::var_os("KB_WORKSPACE_ROOT").map(PathBuf::from);
@@ -846,7 +940,7 @@ fn load_registry() -> Result<Registry, Vec<Diagnostic>> {
         .unwrap_or_else(|| cwd.clone())
         .join(".config/knowledge-infra/sources.toml");
     resolve_registry(&RegistryLocator {
-        explicit: None,
+        explicit,
         cwd,
         env_path,
         workspace_root,
@@ -888,32 +982,54 @@ fn context_for_spec(
 fn find_git_root(path: &Path) -> Option<PathBuf> {
     let mut current = fs::canonicalize(path).ok()?;
     loop {
-        let marker = current.join(".git");
-        if fs::symlink_metadata(&marker)
-            .ok()
-            .is_some_and(|metadata| metadata.is_file() || metadata.is_dir())
-        {
-            return Some(current);
+        if let Ok(backend) = GitBackend::new(&current) {
+            return Some(backend.root().to_path_buf());
         }
         if !current.pop() {
             return None;
         }
     }
 }
+fn path_within(path: &Path, root: &Path) -> bool {
+    let path = normalize_compare_path(path);
+    let root = normalize_compare_path(root);
+    path == root || path.starts_with(root)
+}
+fn normalize_compare_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let text = path.to_string_lossy();
+        if let Some(rest) = text.strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    path.to_path_buf()
+}
 fn read_file_arg(args: &ArgMatches, name: &str) -> Result<Vec<u8>, Diagnostic> {
+    const MAX_INPUT: usize = 64 * 1024 * 1024;
     let path = args
         .get_one::<String>(name)
         .expect("clap required file argument");
     if path == "-" {
         let mut bytes = Vec::new();
-        return std::io::stdin()
+        std::io::stdin()
+            .take((MAX_INPUT + 1) as u64)
             .read_to_end(&mut bytes)
-            .map(|_| bytes)
-            .map_err(|_| Diagnostic::error("KBV2-CLI-IO", "could not read standard input"));
+            .map_err(|_| Diagnostic::error("KBV2-CLI-IO", "could not read standard input"))?;
+        if bytes.len() > MAX_INPUT {
+            return Err(Diagnostic::error("KBV2-CLI-IO", "input file is too large"));
+        }
+        return Ok(bytes);
     }
-    fs::read(path).map_err(|_| {
-        Diagnostic::error("KBV2-CLI-IO", "could not read input file").at_path(PathBuf::from(path))
-    })
+    let input = PathBuf::from(path);
+    let input = if input.is_absolute() {
+        input
+    } else {
+        std::path::absolute(&input)
+            .map_err(|_| Diagnostic::error("KBV2-CLI-IO", "could not read input file"))?
+    };
+    rhizome_core::source::read_regular_file_nofollow_bounded(&input, MAX_INPUT)
+        .map_err(|_| Diagnostic::error("KBV2-CLI-IO", "could not read input file").at_path(input))
 }
 fn parse_kind(value: &str) -> Result<NoteKind, Diagnostic> {
     match value {
