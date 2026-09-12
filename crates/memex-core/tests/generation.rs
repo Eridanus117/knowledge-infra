@@ -2,8 +2,9 @@ use memex_core::generation::{IndexManager, build_generation, open_current, publi
 use memex_core::lock::PublicationLock;
 use memex_core::manifest::{decode_manifest, encode_manifest};
 use memex_core::{DocumentRecord, MemexError, decode_ndjson, encode_ndjson};
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
+use tantivy::Index;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
@@ -138,6 +139,30 @@ fn interrupted_build_cleans_its_temporary_sibling() {
 }
 
 #[test]
+fn interrupted_cleanup_does_not_delete_an_active_builder_lease() {
+    let scratch = ScratchDirectory::new();
+    let manager = scratch.manager();
+    let generations = manager.root.join("generations");
+    fs::create_dir_all(&generations).unwrap();
+    let active = generations.join(".memex-generation-active.tmp");
+    fs::create_dir_all(&active).unwrap();
+    let lease = active.with_extension("tmp.lock");
+    let lease_file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(&lease)
+        .unwrap();
+    fs4::fs_std::FileExt::try_lock_exclusive(&lease_file).unwrap();
+
+    let id = build_generation(&manager, &fixture_records()).expect("build should proceed");
+
+    assert!(active.exists(), "an active builder temp must not be removed");
+    assert!(generation_path(&manager, id.as_str()).is_dir());
+    drop(lease_file);
+}
+
+#[test]
 fn corrupt_manifest_cannot_be_published_and_current_stays_byte_identical() {
     let scratch = ScratchDirectory::new();
     let manager = scratch.manager();
@@ -185,6 +210,42 @@ fn open_current_rejects_unknown_or_malformed_generation_without_fallback() {
 
     fs::write(manager.root.join("CURRENT"), b"\n").unwrap();
     assert!(open_current(&manager).is_err());
+}
+
+#[test]
+fn missing_tantivy_managed_metadata_cannot_be_published() {
+    let scratch = ScratchDirectory::new();
+    let manager = scratch.manager();
+    let id = publish_fixture(&manager, &fixture_records());
+    let before = current_bytes(&manager);
+    let managed_path = generation_path(&manager, id.as_str()).join("tantivy/.managed.json");
+    fs::remove_file(managed_path).unwrap();
+
+    let error = publish(&manager, &id).expect_err("missing managed metadata must fail closed");
+
+    assert!(error.to_string().contains("Tantivy") || error.to_string().contains("managed"));
+    assert_eq!(current_bytes(&manager), before);
+}
+
+#[test]
+fn missing_tantivy_segment_component_cannot_be_published() {
+    let scratch = ScratchDirectory::new();
+    let manager = scratch.manager();
+    let id = publish_fixture(&manager, &fixture_records());
+    let before = current_bytes(&manager);
+    let tantivy_path = generation_path(&manager, id.as_str()).join("tantivy");
+    let index = Index::open_in_dir(&tantivy_path).expect("built Tantivy index should open");
+    let segment_file = index.searchable_segment_metas().unwrap()[0]
+        .list_files()
+        .into_iter()
+        .find(|path| tantivy_path.join(path).is_file())
+        .expect("fixture should have a committed segment component");
+    fs::remove_file(tantivy_path.join(segment_file)).unwrap();
+
+    let error = publish(&manager, &id).expect_err("missing segment component must fail closed");
+
+    assert!(error.to_string().contains("Tantivy") || error.to_string().contains("segment"));
+    assert_eq!(current_bytes(&manager), before);
 }
 
 #[test]

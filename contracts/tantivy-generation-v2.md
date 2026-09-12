@@ -23,10 +23,14 @@ An `IndexManager` owns one directory with this exact public layout:
 
 `<generation-id>` is 64 lowercase hexadecimal characters. A generation is
 constructed in a uniquely named sibling temporary directory under
-`generations/`, then its files and Tantivy index are synchronized, and only
-then is that directory renamed to its final id. Temporary directories are
-never valid generations. A failed build removes the temporary directory and
-cannot change `CURRENT`.
+`generations/`. Each temporary directory owns an exclusive build lease while
+it is active; cleanup may remove a temporary directory only after acquiring
+that lease, so a concurrent builder's files are never deleted. A crashed
+builder releases the lease with its file handle and its temporary directory is
+removed by a later build. After all files and the Tantivy index are
+synchronized, the temporary directory is renamed to its final id. Temporary
+directories are never valid generations. A failed build removes its own
+temporary directory and cannot change `CURRENT`.
 
 `CURRENT` is exactly the UTF-8 bytes `<generation-id>\n`. Publication writes
 those bytes to a temporary sibling file, synchronizes it, and atomically
@@ -136,15 +140,22 @@ same-id final directory already exists, it must validate byte-for-byte against
 the requested records or the operation fails closed.
 
 Validation reads and decodes the entire canonical docs stream, checks its hash,
-count, and id, strictly decodes the manifest, opens `tantivy/`, checks the
-exact schema and commit payload, and verifies all committed segment files and
-their live document count. `open_current` reads exactly one valid `CURRENT`
-line and returns a reader for that validated generation. It never silently
-selects another generation. Since `CURRENT` changes by atomic replacement and
-published generation directories are immutable, a reader observes only the
-old complete snapshot or the new complete snapshot.
+count, and id, strictly decodes the manifest, opens `tantivy/`, and requires
+Tantivy's `.managed.json` metadata to be present, canonical, and valid. Every
+component required by each committed segment must be listed in that metadata,
+must be a regular file, and must pass Tantivy's component checksum validation;
+the committed segment set and live document count are checked as well. It
+checks the exact schema and commit payload before returning a reader.
+`open_current` reads exactly one valid `CURRENT` line and returns a reader for
+that validated generation. It never silently selects another generation. Since
+`CURRENT` changes by atomic replacement and published generation directories
+are immutable, a reader observes only the old complete snapshot or the new
+complete snapshot.
 
 `publish` validates before taking the short lock and revalidates while holding
 it. Any validation, lock, synchronization, or atomic replacement failure
-leaves the previous `CURRENT` bytes untouched. A generation cannot become
-current unless its docs, manifest, and Tantivy commit all agree.
+leaves the previous `CURRENT` bytes untouched. If a post-switch parent sync
+fails, the previous bytes are atomically restored and the parent is
+resynchronized; a failed restoration or resynchronization is reported as
+fail-closed. A generation cannot become current unless its docs, manifest, and
+Tantivy commit all agree.

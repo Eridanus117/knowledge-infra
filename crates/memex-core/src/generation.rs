@@ -8,9 +8,11 @@ pub use crate::manifest::{GenerationId, GenerationManifest};
 use crate::tantivy_schema::{INDEX_PROFILE, build_schema, build_tantivy, register_analyzers};
 use crate::{decode_ndjson, encode_ndjson};
 use sha2::{Digest, Sha256};
-use std::fs::{self, File};
+use fs4::fs_std::FileExt;
+use std::fs::{self, File, OpenOptions};
+use std::collections::HashSet;
+use std::path::{Component, Path, PathBuf};
 use std::io::Write;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tantivy::Index;
 
@@ -18,6 +20,7 @@ const CURRENT_FILENAME: &str = "CURRENT";
 const GENERATIONS_DIRECTORY: &str = "generations";
 const TEMP_GENERATION_PREFIX: &str = ".memex-generation-";
 const TEMP_GENERATION_SUFFIX: &str = ".tmp";
+const BUILD_LEASE_SUFFIX: &str = ".lock";
 const TEMP_CURRENT_PREFIX: &str = ".memex-current-";
 const TEMP_CURRENT_SUFFIX: &str = ".tmp";
 
@@ -70,16 +73,34 @@ pub fn build_generation(
         drop(reader);
         return Ok(id);
     }
-
     let temporary_directory = temporary_generation_directory(&generations, &id);
     fs::create_dir(&temporary_directory).map_err(|source| io_error(&temporary_directory, source))?;
+    let lease_path = temporary_lease_path(&temporary_directory);
+    let lease = match BuildLease::try_acquire(&lease_path) {
+        Ok(lease) => lease,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&temporary_directory);
+            let _ = fs::remove_file(&lease_path);
+            return Err(error);
+        }
+    };
     let build_result = build_temporary_generation(&temporary_directory, &docs, &manifest, records);
     if let Err(error) = build_result {
+        drop(lease);
         let _ = fs::remove_dir_all(&temporary_directory);
+        let _ = fs::remove_file(&lease_path);
         return Err(error);
     }
 
+    // Keep the lease while renaming so cleanup in another builder cannot
+    // remove this fully-built directory in the rename window.
     let rename_result = fs::rename(&temporary_directory, &final_directory);
+    drop(lease);
+    if let Err(source) = fs::remove_file(&lease_path) {
+        let _ = fs::remove_dir_all(&temporary_directory);
+        let _ = fs::remove_dir_all(&final_directory);
+        return Err(io_error(&lease_path, source));
+    }
     match rename_result {
         Ok(()) => {
             sync_directory(&generations).map_err(|source| io_error(&generations, source))?;
@@ -95,6 +116,7 @@ pub fn build_generation(
                     "concurrent same-id build has different docs bytes",
                 ));
             }
+            sync_directory(&generations).map_err(|source| io_error(&generations, source))?;
             drop(reader);
             Ok(id)
         }
@@ -113,8 +135,15 @@ pub fn open_current(manager: &IndexManager) -> Result<GenerationReader, MemexErr
     validate_generation(manager, &id)
 }
 
-/// Validate a complete generation and atomically make it current.
 pub fn publish(manager: &IndexManager, id: &GenerationId) -> Result<(), MemexError> {
+    publish_inner(manager, id, &sync_directory)
+}
+
+fn publish_inner(
+    manager: &IndexManager,
+    id: &GenerationId,
+    sync: &dyn Fn(&Path) -> std::io::Result<()>,
+) -> Result<(), MemexError> {
     let _ = validate_generation(manager, id)?;
     let _lock = PublicationLock::try_acquire(&manager.root)?;
     let _ = validate_generation(manager, id)?;
@@ -137,7 +166,7 @@ pub fn publish(manager: &IndexManager, id: &GenerationId) -> Result<(), MemexErr
     // Preflight the parent before the switch. The post-switch sync is retained
     // for durability; if it fails, the old bytes are restored while the lock is
     // still held.
-    sync_directory(&manager.root).map_err(|source| io_error(&manager.root, source))?;
+    sync(&manager.root).map_err(|source| io_error(&manager.root, source))?;
     let current_bytes = format!("{id}\n").into_bytes();
     let temporary_current = temporary_current_path(&manager.root);
     let write_result = write_file_sync(&temporary_current, &current_bytes)
@@ -146,13 +175,14 @@ pub fn publish(manager: &IndexManager, id: &GenerationId) -> Result<(), MemexErr
         let _ = fs::remove_file(&temporary_current);
         return Err(error);
     }
-    if let Err(source) = sync_directory(&manager.root) {
-        let rollback = restore_current(&manager.root, &current_path, previous.as_deref());
-        if rollback.is_err() {
+    if let Err(source) = sync(&manager.root) {
+        let rollback = restore_current(&manager.root, &current_path, previous.as_deref())
+            .and_then(|()| sync(&manager.root).map_err(|error| io_error(&manager.root, error)));
+        if let Err(rollback_error) = rollback {
             return Err(io_error(
                 &current_path,
                 std::io::Error::other(format!(
-                    "CURRENT sync failed ({source}) and rollback failed"
+                    "CURRENT sync failed ({source}) and rollback failed: {rollback_error}"
                 )),
             ));
         }
@@ -237,9 +267,10 @@ fn validate_generation(
             "manifest id does not match framed generation inputs",
         ));
     }
-
     let tantivy_directory = directory.join("tantivy");
     require_directory(&tantivy_directory, "Tantivy directory is missing")?;
+    let managed_path = tantivy_directory.join(".managed.json");
+    let managed_files = read_managed_files(&managed_path)?;
     let index = Index::open_in_dir(&tantivy_directory)
         .map_err(|source| tantivy_error(&tantivy_directory, source))?;
     if index.schema() != build_schema() {
@@ -269,6 +300,7 @@ fn validate_generation(
             "committed Tantivy document count does not match docs.ndjson",
         ));
     }
+    validate_committed_files(&index, &tantivy_directory, &managed_files, &metas.segments)?;
     let corrupt_files = index
         .validate_checksum()
         .map_err(|source| tantivy_error(&tantivy_directory, source))?;
@@ -335,6 +367,11 @@ fn temporary_generation_directory(generations: &Path, id: &GenerationId) -> Path
         TEMP_GENERATION_SUFFIX.trim_start_matches('.')
     ))
 }
+fn temporary_lease_path(temporary_directory: &Path) -> PathBuf {
+    let mut path = temporary_directory.as_os_str().to_os_string();
+    path.push(BUILD_LEASE_SUFFIX);
+    PathBuf::from(path)
+}
 
 fn temporary_current_path(root: &Path) -> PathBuf {
     let sequence = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
@@ -356,10 +393,145 @@ fn cleanup_interrupted_temps(generations: &Path) {
         let Some(name) = name.to_str() else {
             continue;
         };
-        if name.starts_with(TEMP_GENERATION_PREFIX) && name.ends_with(TEMP_GENERATION_SUFFIX) {
-            let _ = fs::remove_dir_all(path);
+        if !name.starts_with(TEMP_GENERATION_PREFIX) || !name.ends_with(TEMP_GENERATION_SUFFIX) {
+            continue;
+        }
+        let lease_path = temporary_lease_path(&path);
+        let Ok(file) = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&lease_path)
+        else {
+            continue;
+        };
+        let Ok(true) = file.try_lock_exclusive() else {
+            continue;
+        };
+        drop(file);
+        let _ = fs::remove_dir_all(path);
+        let _ = fs::remove_file(lease_path);
+    }
+}
+
+struct BuildLease {
+    file: File,
+}
+
+impl BuildLease {
+    fn try_acquire(path: &Path) -> Result<Self, MemexError> {
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|source| MemexError::Lock {
+                path: path.to_path_buf(),
+                message: source.to_string(),
+            })?;
+        match file.try_lock_exclusive() {
+            Ok(true) => Ok(Self { file }),
+            Ok(false) => Err(MemexError::LockContended {
+                path: path.to_path_buf(),
+            }),
+            Err(source) => Err(MemexError::Lock {
+                path: path.to_path_buf(),
+                message: source.to_string(),
+            }),
         }
     }
+}
+
+impl Drop for BuildLease {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
+fn read_managed_files(path: &Path) -> Result<HashSet<PathBuf>, MemexError> {
+    let bytes = read_regular_file(path)?;
+    if bytes.len() < 2
+        || !bytes.ends_with(b"\n")
+        || bytes[..bytes.len() - 1]
+            .last()
+            .is_some_and(u8::is_ascii_whitespace)
+        || bytes.contains(&b'\r')
+    {
+        return Err(tantivy_error(
+            path,
+            "managed metadata is not a canonical Tantivy JSON stream",
+        ));
+    }
+    let managed_files = serde_json::from_slice::<HashSet<PathBuf>>(&bytes)
+        .map_err(|source| tantivy_error(path, format!("managed metadata is invalid: {source}")))?;
+    for relative in &managed_files {
+        if relative.as_os_str().is_empty()
+            || relative.is_absolute()
+            || relative.components().any(|component| {
+                matches!(
+                    component,
+                    Component::Prefix(_)
+                        | Component::RootDir
+                        | Component::ParentDir
+                        | Component::CurDir
+                )
+            })
+        {
+            return Err(tantivy_error(
+                path,
+                "managed metadata contains an unsafe relative path",
+            ));
+        }
+    }
+    Ok(managed_files)
+}
+
+fn validate_committed_files(
+    index: &Index,
+    tantivy_directory: &Path,
+    managed_files: &HashSet<PathBuf>,
+    segments: &[tantivy::index::SegmentMeta],
+) -> Result<(), MemexError> {
+    for segment in segments {
+        for component in tantivy::index::SegmentComponent::iterator() {
+            let relative = segment.relative_path(*component);
+            let optional_delete = *component == tantivy::index::SegmentComponent::Delete
+                && !segment.has_deletes();
+            if optional_delete && !managed_files.contains(&relative) {
+                continue;
+            }
+            if !managed_files.contains(&relative) {
+                return Err(tantivy_error(
+                    tantivy_directory,
+                    format!("committed component is absent from managed metadata: {relative:?}"),
+                ));
+            }
+            let full_path = tantivy_directory.join(&relative);
+            let metadata = fs::symlink_metadata(&full_path).map_err(|source| {
+                tantivy_error(
+                    &full_path,
+                    format!("committed component is missing: {source}"),
+                )
+            })?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(tantivy_error(
+                    &full_path,
+                    "committed component is not a regular file",
+                ));
+            }
+            let valid = index
+                .directory()
+                .validate_checksum(&relative)
+                .map_err(|source| tantivy_error(&full_path, source))?;
+            if !valid {
+                return Err(tantivy_error(
+                    &full_path,
+                    "committed component checksum is invalid",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn require_directory(path: &Path, message: &str) -> Result<(), MemexError> {
@@ -390,6 +562,7 @@ fn write_file_sync(path: &Path, bytes: &[u8]) -> Result<(), MemexError> {
     file.sync_all().map_err(|source| io_error(path, source))
 }
 
+#[cfg(not(windows))]
 fn sync_tantivy(path: &Path) -> Result<(), MemexError> {
     let entries = fs::read_dir(path).map_err(|source| io_error(path, source))?;
     for entry in entries {
@@ -485,5 +658,49 @@ fn tantivy_error(path: &Path, source: impl ToString) -> MemexError {
     MemexError::Tantivy {
         path: path.to_path_buf(),
         message: source.to_string(),
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn failed_post_swap_sync_restores_current_and_resyncs_parent() {
+        let root = std::env::temp_dir().join(format!(
+            "memex-generation-sync-fault-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should follow the Unix epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("scratch directory should be created");
+        let manager = IndexManager::new(root.clone());
+        let records =
+            decode_ndjson(include_bytes!("../../../fixtures/memex/generation/records.ndjson"))
+                .expect("generation fixture must be canonical");
+        let old_id = build_generation(&manager, &records).expect("old generation should build");
+        publish(&manager, &old_id).expect("old generation should publish");
+        let new_id =
+            build_generation(&manager, &records[..records.len() - 1]).expect("new generation should build");
+        let before = fs::read(root.join(CURRENT_FILENAME)).expect("CURRENT should exist");
+        let calls = AtomicUsize::new(0);
+        let sync = |path: &Path| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                Err(std::io::Error::other("injected post-swap sync failure"))
+            } else {
+                sync_directory(path)
+            }
+        };
+
+        let error =
+            publish_inner(&manager, &new_id, &sync).expect_err("injected sync must fail closed");
+
+        assert!(error.to_string().contains("sync"));
+        assert_eq!(fs::read(root.join(CURRENT_FILENAME)).unwrap(), before);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        fs::remove_dir_all(root).expect("scratch directory should be removed");
     }
 }
