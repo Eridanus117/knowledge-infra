@@ -70,20 +70,24 @@ pub fn build_generation(
                 "same generation id has different docs bytes",
             ));
         }
+        sync_directory(&generations).map_err(|source| io_error(&generations, source))?;
         drop(reader);
         return Ok(id);
     }
     let temporary_directory = temporary_generation_directory(&generations, &id);
-    fs::create_dir(&temporary_directory).map_err(|source| io_error(&temporary_directory, source))?;
     let lease_path = temporary_lease_path(&temporary_directory);
     let lease = match BuildLease::try_acquire(&lease_path) {
         Ok(lease) => lease,
         Err(error) => {
-            let _ = fs::remove_dir_all(&temporary_directory);
             let _ = fs::remove_file(&lease_path);
             return Err(error);
         }
     };
+    if let Err(source) = fs::create_dir(&temporary_directory) {
+        drop(lease);
+        let _ = fs::remove_file(&lease_path);
+        return Err(io_error(&temporary_directory, source));
+    }
     let build_result = build_temporary_generation(&temporary_directory, &docs, &manifest, records);
     if let Err(error) = build_result {
         drop(lease);
@@ -98,9 +102,6 @@ pub fn build_generation(
     drop(lease);
     if let Err(source) = fs::remove_file(&lease_path) {
         let _ = fs::remove_dir_all(&temporary_directory);
-        if rename_result.is_ok() {
-            let _ = fs::remove_dir_all(&final_directory);
-        }
         return Err(io_error(&lease_path, source));
     }
     match rename_result {
@@ -178,13 +179,22 @@ fn publish_inner(
         return Err(error);
     }
     if let Err(source) = sync(&manager.root) {
-        let rollback = restore_current(&manager.root, &current_path, previous.as_deref())
-            .and_then(|()| sync(&manager.root).map_err(|error| io_error(&manager.root, error)));
+        let rollback = restore_current(&manager.root, &current_path, previous.as_deref());
+        let resync = sync(&manager.root).map_err(|error| io_error(&manager.root, error));
         if let Err(rollback_error) = rollback {
+            let detail = match resync {
+                Ok(()) => format!("CURRENT sync failed ({source}) and rollback failed: {rollback_error}"),
+                Err(resync_error) => format!(
+                    "CURRENT sync failed ({source}), rollback failed: {rollback_error}, and rollback sync failed: {resync_error}"
+                ),
+            };
+            return Err(io_error(&current_path, std::io::Error::other(detail)));
+        }
+        if let Err(resync_error) = resync {
             return Err(io_error(
                 &current_path,
                 std::io::Error::other(format!(
-                    "CURRENT sync failed ({source}) and rollback failed: {rollback_error}"
+                    "CURRENT sync failed ({source}) and rollback sync failed: {resync_error}"
                 )),
             ));
         }
