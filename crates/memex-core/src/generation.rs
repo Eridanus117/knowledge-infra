@@ -493,9 +493,39 @@ fn read_managed_files(path: &Path) -> Result<HashSet<PathBuf>, MemexError> {
             "managed metadata is not a canonical Tantivy JSON stream",
         ));
     }
-    let managed_files = serde_json::from_slice::<HashSet<PathBuf>>(&bytes)
+    let parsed = serde_json::from_slice::<serde_json::Value>(&bytes)
         .map_err(|source| tantivy_error(path, format!("managed metadata is invalid: {source}")))?;
-    for relative in &managed_files {
+    let entries = parsed.as_array().ok_or_else(|| {
+        tantivy_error(
+            path,
+            "managed metadata must be a canonical JSON array of paths",
+        )
+    })?;
+    let mut canonical = serde_json::to_vec(&parsed)
+        .map_err(|source| tantivy_error(path, format!("managed metadata is invalid: {source}")))?;
+    canonical.push(b'\n');
+    if bytes != canonical {
+        return Err(tantivy_error(
+            path,
+            "managed metadata is not a canonical Tantivy JSON stream",
+        ));
+    }
+
+    let mut managed_files = HashSet::with_capacity(entries.len());
+    for entry in entries {
+        let value = entry.as_str().ok_or_else(|| {
+            tantivy_error(
+                path,
+                "managed metadata must contain only JSON string paths",
+            )
+        })?;
+        let relative = PathBuf::from(value);
+        if !managed_files.insert(relative.clone()) {
+            return Err(tantivy_error(
+                path,
+                "managed metadata contains a duplicate path",
+            ));
+        }
         if relative.as_os_str().is_empty()
             || relative.is_absolute()
             || relative.components().any(|component| {
@@ -733,5 +763,24 @@ mod tests {
         assert_eq!(fs::read(root.join(CURRENT_FILENAME)).unwrap(), before);
         assert_eq!(calls.load(Ordering::SeqCst), 3);
         fs::remove_dir_all(root).expect("scratch directory should be removed");
+    }
+
+    #[test]
+    fn managed_metadata_parser_accepts_paths_with_spaces() {
+        let path = std::env::temp_dir().join(format!(
+            "memex-managed-metadata-space-{}-{}.json",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock should follow the Unix epoch")
+                .as_nanos()
+        ));
+        fs::write(&path, b"[\"segment with space\"]\n")
+            .expect("managed metadata fixture should be written");
+
+        let managed_files = read_managed_files(&path).expect("spaces are valid path content");
+
+        assert!(managed_files.contains(Path::new("segment with space")));
+        fs::remove_file(path).expect("managed metadata fixture should be removed");
     }
 }

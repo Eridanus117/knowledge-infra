@@ -244,6 +244,50 @@ fn missing_tantivy_managed_metadata_cannot_be_published() {
 }
 
 #[test]
+fn noncanonical_tantivy_managed_metadata_cannot_be_published() {
+    let scratch = ScratchDirectory::new();
+    let manager = scratch.manager();
+    let id = publish_fixture(&manager, &fixture_records());
+    let before = current_bytes(&manager);
+    let managed_path = generation_path(&manager, id.as_str()).join("tantivy/.managed.json");
+    let canonical = fs::read(&managed_path).unwrap();
+    assert!(canonical.len() > 2);
+
+    let mut noncanonical = b" ".to_vec();
+    noncanonical.extend_from_slice(&canonical[..canonical.len() - 1]);
+    noncanonical.push(b'\n');
+    noncanonical.insert(2, b' ');
+    fs::write(&managed_path, noncanonical).unwrap();
+
+    let error = publish(&manager, &id).expect_err("noncanonical metadata must fail closed");
+
+    assert!(error.to_string().contains("Tantivy") || error.to_string().contains("managed"));
+    assert_eq!(current_bytes(&manager), before);
+}
+
+#[test]
+fn duplicate_tantivy_managed_metadata_entry_cannot_be_published() {
+    let scratch = ScratchDirectory::new();
+    let manager = scratch.manager();
+    let id = publish_fixture(&manager, &fixture_records());
+    let before = current_bytes(&manager);
+    let managed_path = generation_path(&manager, id.as_str()).join("tantivy/.managed.json");
+    let canonical = fs::read(&managed_path).unwrap();
+    let mut entries: Vec<serde_json::Value> =
+        serde_json::from_slice(&canonical).expect("managed metadata should be an array");
+    let first = entries.first().cloned().expect("managed metadata should not be empty");
+    entries.push(first);
+    let mut duplicate = serde_json::to_vec(&entries).unwrap();
+    duplicate.push(b'\n');
+    fs::write(&managed_path, duplicate).unwrap();
+
+    let error = publish(&manager, &id).expect_err("duplicate metadata must fail closed");
+
+    assert!(error.to_string().contains("Tantivy") || error.to_string().contains("managed"));
+    assert_eq!(current_bytes(&manager), before);
+}
+
+#[test]
 fn missing_tantivy_segment_component_cannot_be_published() {
     let scratch = ScratchDirectory::new();
     let manager = scratch.manager();
