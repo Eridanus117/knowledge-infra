@@ -163,6 +163,22 @@ fn interrupted_cleanup_does_not_delete_an_active_builder_lease() {
 }
 
 #[test]
+fn interrupted_cleanup_removes_an_unowned_orphan_lease() {
+    let scratch = ScratchDirectory::new();
+    let manager = scratch.manager();
+    let generations = manager.root.join("generations");
+    fs::create_dir_all(&generations).unwrap();
+    let orphan_temp = generations.join(".memex-generation-orphan.tmp");
+    let orphan_lease = orphan_temp.with_extension("tmp.lock");
+    fs::write(&orphan_lease, b"orphan").unwrap();
+
+    let id = build_generation(&manager, &fixture_records()).expect("build should proceed");
+
+    assert!(!orphan_lease.exists());
+    assert!(generation_path(&manager, id.as_str()).is_dir());
+}
+
+#[test]
 fn corrupt_manifest_cannot_be_published_and_current_stays_byte_identical() {
     let scratch = ScratchDirectory::new();
     let manager = scratch.manager();

@@ -100,7 +100,9 @@ pub fn build_generation(
     // remove this fully-built directory in the rename window.
     let rename_result = fs::rename(&temporary_directory, &final_directory);
     drop(lease);
-    if let Err(source) = fs::remove_file(&lease_path) {
+    if let Err(source) = fs::remove_file(&lease_path)
+        && source.kind() != std::io::ErrorKind::NotFound
+    {
         let _ = fs::remove_dir_all(&temporary_directory);
         return Err(io_error(&lease_path, source));
     }
@@ -405,24 +407,41 @@ fn cleanup_interrupted_temps(generations: &Path) {
         let Some(name) = name.to_str() else {
             continue;
         };
-        if !name.starts_with(TEMP_GENERATION_PREFIX) || !name.ends_with(TEMP_GENERATION_SUFFIX) {
-            continue;
+        if name.starts_with(TEMP_GENERATION_PREFIX) && name.ends_with(TEMP_GENERATION_SUFFIX) {
+            let lease_path = temporary_lease_path(&path);
+            let Some(file) = try_open_unowned_lease(&lease_path) else {
+                continue;
+            };
+            let removed = fs::remove_dir_all(&path).is_ok();
+            drop(file);
+            if removed {
+                let _ = fs::remove_file(lease_path);
+            }
+        } else if name.starts_with(TEMP_GENERATION_PREFIX)
+            && name.ends_with(&format!("{TEMP_GENERATION_SUFFIX}{BUILD_LEASE_SUFFIX}"))
+        {
+            let temp_name = &name[..name.len() - BUILD_LEASE_SUFFIX.len()];
+            let temp_path = generations.join(temp_name);
+            if !temp_path.exists()
+                && let Some(file) = try_open_unowned_lease(&path)
+            {
+                drop(file);
+                let _ = fs::remove_file(path);
+            }
         }
-        let lease_path = temporary_lease_path(&path);
-        let Ok(file) = OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .open(&lease_path)
-        else {
-            continue;
-        };
-        let Ok(true) = file.try_lock_exclusive() else {
-            continue;
-        };
-        drop(file);
-        let _ = fs::remove_dir_all(path);
-        let _ = fs::remove_file(lease_path);
+    }
+}
+
+fn try_open_unowned_lease(path: &Path) -> Option<File> {
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(path)
+        .ok()?;
+    match file.try_lock_exclusive() {
+        Ok(true) => Some(file),
+        Ok(false) | Err(_) => None,
     }
 }
 
