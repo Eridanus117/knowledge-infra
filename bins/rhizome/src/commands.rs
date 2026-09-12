@@ -671,24 +671,25 @@ fn install_lefthook(repo: &Path) -> Result<(), AdoptError> {
         ]));
     }
 
-    let status = Command::new("lefthook")
+    let status = match Command::new("lefthook")
         .arg("install")
         .current_dir(repo)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .map_err(|_| {
-            AdoptError::Diagnostics(vec![
-                Diagnostic::error("KBV2-ADOPT-LEFTHOOK", "lefthook install could not be run")
-                    .at_path(repo.to_path_buf()),
-            ])
-        })?;
+    {
+        Ok(status) => status,
+        Err(_) => {
+            return Err(hook_failure(
+                "lefthook install could not be run",
+                repo,
+                &pre_commit,
+            ));
+        }
+    };
     if !status.success() {
-        return Err(AdoptError::Diagnostics(vec![
-            Diagnostic::error("KBV2-ADOPT-LEFTHOOK", "lefthook install failed")
-                .at_path(repo.to_path_buf()),
-        ]));
+        return Err(hook_failure("lefthook install failed", repo, &pre_commit));
     }
     let Some(bytes) = read_existing_hook(&pre_commit)? else {
         return Err(AdoptError::Diagnostics(vec![
@@ -700,15 +701,46 @@ fn install_lefthook(repo: &Path) -> Result<(), AdoptError> {
         ]));
     };
     if !hook_invokes_lefthook(&bytes) {
-        return Err(AdoptError::Diagnostics(vec![
+        let cleanup = remove_created_hook(&pre_commit);
+        let mut diagnostics = vec![
             Diagnostic::error(
                 "KBV2-ADOPT-HOOK-CONFLICT",
                 "lefthook install did not install the expected hook",
             )
             .at_path(pre_commit),
-        ]));
+        ];
+        if let Err(error) = cleanup {
+            diagnostics.extend(error.into_diagnostics());
+        }
+        return Err(AdoptError::Diagnostics(diagnostics));
     }
     Ok(())
+}
+
+fn hook_failure(message: &'static str, repo: &Path, pre_commit: &Path) -> AdoptError {
+    let mut diagnostics =
+        vec![Diagnostic::error("KBV2-ADOPT-LEFTHOOK", message).at_path(repo.to_path_buf())];
+    if let Err(error) = remove_created_hook(pre_commit) {
+        diagnostics.extend(error.into_diagnostics());
+    }
+    AdoptError::Diagnostics(diagnostics)
+}
+
+fn remove_created_hook(path: &Path) -> Result<(), AdoptError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+            std::fs::remove_file(path).map_err(|source| AdoptError::Io {
+                path: path.to_path_buf(),
+                source,
+            })
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(AdoptError::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
 }
 
 fn effective_hooks_dir(repo: &Path) -> Result<PathBuf, AdoptError> {
