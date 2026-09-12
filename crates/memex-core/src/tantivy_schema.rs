@@ -10,7 +10,6 @@ use tantivy::{Index, TantivyDocument};
 pub const INDEX_PROFILE_V2: &str = "tantivy-central-v2";
 /// Alias used by generation and projection callers.
 pub const INDEX_PROFILE: &str = INDEX_PROFILE_V2;
-const PROFILE_FILE_NAME: &str = "profile.json";
 
 /// Versioned index profile selected by this schema.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -141,9 +140,8 @@ pub fn register_analyzers(index: &Index) {
 
 /// Build one persistent central index from the strict compiled document stream.
 ///
-/// The destination is created when absent and must not already contain a
-/// Tantivy index. The profile sidecar makes the profile explicit to generation
-/// code without changing Tantivy's own `meta.json` format.
+/// The profile is persisted as Tantivy's commit payload so readers can validate
+/// the index without consulting a sidecar file.
 pub fn build_tantivy<P: AsRef<Path>>(
     index_dir: P,
     records: &[DocumentRecord],
@@ -158,11 +156,9 @@ pub fn build_tantivy<P: AsRef<Path>>(
     for record in records {
         writer.add_document(fields.document(record))?;
     }
-    writer.commit()?;
-    fs::write(
-        index_dir.join(PROFILE_FILE_NAME),
-        format!("{{\"index_profile\":\"{}\"}}\n", INDEX_PROFILE),
-    )?;
+    let mut prepared_commit = writer.prepare_commit()?;
+    prepared_commit.set_payload(&format!("{{\"index_profile\":\"{}\"}}", INDEX_PROFILE));
+    prepared_commit.commit()?;
     Ok(index)
 }
 

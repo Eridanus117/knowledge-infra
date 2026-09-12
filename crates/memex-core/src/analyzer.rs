@@ -56,29 +56,28 @@ impl Tokenizer for JiebaSearchTokenizer {
     type TokenStream<'a> = JiebaSearchTokenStream;
 
     fn token_stream<'a>(&'a mut self, text: &'a str) -> Self::TokenStream<'a> {
+        let mut position = 0usize;
         let tokens = self
             .worker
             .cut_for_search(text, false)
             .into_iter()
             .filter_map(|token| {
                 let normalized = token.word.to_lowercase();
-                if normalized.trim().is_empty()
-                    || normalized.chars().count() > MAX_NATURAL_TOKEN_SCALARS
-                {
+                if normalized.trim().is_empty() {
+                    return None;
+                }
+                let token_position = position;
+                position += 1;
+                if normalized.chars().count() > MAX_NATURAL_TOKEN_SCALARS {
                     return None;
                 }
                 Some(Token {
                     offset_from: token.byte_start,
                     offset_to: token.byte_end,
-                    position: 0,
+                    position: token_position,
                     text: normalized,
                     position_length: 1,
                 })
-            })
-            .enumerate()
-            .map(|(position, mut token)| {
-                token.position = position;
-                token
             })
             .collect();
         JiebaSearchTokenStream { tokens, index: 0 }

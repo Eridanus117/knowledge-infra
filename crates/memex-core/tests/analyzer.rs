@@ -10,6 +10,44 @@ fn collect_tokens(mut analyzer: TextAnalyzer, input: &str) -> Vec<String> {
     tokens
 }
 
+fn collect_token_details(
+    mut analyzer: TextAnalyzer,
+    input: &str,
+) -> Vec<(String, usize, usize, usize)> {
+    let mut stream = analyzer.token_stream(input);
+    let mut tokens = Vec::new();
+    while stream.advance() {
+        let token = stream.token();
+        tokens.push((
+            token.text.clone(),
+            token.position,
+            token.offset_from,
+            token.offset_to,
+        ));
+    }
+    tokens
+}
+
+#[test]
+fn natural_v2_preserves_multibyte_offsets_for_overlapping_tokens() {
+    let input = include_str!("../../../fixtures/memex/analyzer/natural.input").trim();
+
+    let details = collect_token_details(natural_v2(), input);
+
+    assert_eq!(
+        details,
+        vec![
+            ("南京".to_owned(), 0, 0, 6),
+            ("京市".to_owned(), 1, 3, 9),
+            ("南京市".to_owned(), 2, 0, 9),
+            ("长江".to_owned(), 3, 9, 15),
+            ("大桥".to_owned(), 4, 15, 21),
+            ("长江大桥".to_owned(), 5, 9, 21),
+            ("mixed".to_owned(), 6, 22, 27),
+        ]
+    );
+}
+
 #[test]
 fn natural_v2_uses_pinned_search_mode_and_lowercases() {
     let input = include_str!("../../../fixtures/memex/analyzer/natural.input").trim();
@@ -51,4 +89,19 @@ fn slug_v2_splits_path_identity_delimiters_and_preserves_ascii_runs() {
 
     assert_eq!(tokens, expected);
     assert_eq!(SLUG_V2, "slug_v2");
+}
+#[test]
+fn natural_v2_preserves_a_position_gap_when_dropping_a_long_token() {
+    let long = "A".repeat(41);
+    let input = format!("keep {long} after");
+
+    let details = collect_token_details(natural_v2(), &input);
+
+    assert_eq!(
+        details,
+        vec![
+            ("keep".to_owned(), 0, 0, 4),
+            ("after".to_owned(), 2, 47, 52),
+        ]
+    );
 }

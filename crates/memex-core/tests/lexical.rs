@@ -119,6 +119,107 @@ fn fixtures() -> Vec<DocumentRecord> {
         ),
     ]
 }
+fn boost_fixtures() -> Vec<DocumentRecord> {
+    vec![
+        record(
+            "fixture:boost:title",
+            "fixture",
+            "boost",
+            &["boost"],
+            "boostneedle",
+            "title candidate",
+            &["title"],
+            "note",
+            None,
+            "Title candidate body.",
+            "boost/title.md",
+        ),
+        record(
+            "fixture:boost:content",
+            "fixture",
+            "boost",
+            &["boost"],
+            "content candidate",
+            "boostneedle",
+            &["content"],
+            "note",
+            None,
+            "Content candidate body.",
+            "boost/content.md",
+        ),
+        record(
+            "fixture:boost:boostneedle",
+            "fixture",
+            "boost",
+            &["boost"],
+            "identity candidate",
+            "identity candidate",
+            &["identity"],
+            "note",
+            None,
+            "Identity candidate body.",
+            "boost/identity.md",
+        ),
+        record(
+            "fixture:boost:path",
+            "fixture",
+            "boost",
+            &["boost"],
+            "path candidate",
+            "path candidate",
+            &["path"],
+            "note",
+            None,
+            "Path candidate body.",
+            "boost/boostneedle.md",
+        ),
+    ]
+}
+
+#[test]
+fn field_boosts_produce_observable_title_identity_path_content_order() {
+    let scratch = ScratchDirectory::new();
+    let records = boost_fixtures();
+    let index = build_tantivy(scratch.path(), &records).expect("central index should build");
+    let schema = index.schema();
+    let title = field(&schema, FIELD_TITLE);
+    let content = field(&schema, FIELD_CONTENT);
+    let identity = field(&schema, FIELD_IDENTITY);
+    let source_path = field(&schema, FIELD_SOURCE_PATH);
+    let mut parser = QueryParser::for_index(&index, vec![title, content, identity, source_path]);
+    parser.set_field_boost(title, 5.0);
+    parser.set_field_boost(content, 1.0);
+    parser.set_field_boost(identity, 2.0);
+    parser.set_field_boost(source_path, 2.0);
+
+    let query = parser
+        .parse_query("boostneedle")
+        .expect("boost query should parse");
+    let reader = index.reader().expect("index reader should open");
+    let hits = reader
+        .searcher()
+        .search(&query, &TopDocs::with_limit(4).order_by_score())
+        .expect("boost query should search");
+    let identities = hits
+        .iter()
+        .map(|(_, address)| {
+            reader
+                .searcher()
+                .doc::<TantivyDocument>(*address)
+                .unwrap()
+                .get_first(identity)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(identities[0], "fixture:boost:title");
+    assert!(identities[1..3].contains(&"fixture:boost:boostneedle".to_owned()));
+    assert!(identities[1..3].contains(&"fixture:boost:path".to_owned()));
+    assert_eq!(identities[3], "fixture:boost:content");
+}
 
 fn field(schema: &tantivy::schema::Schema, name: &str) -> tantivy::schema::Field {
     schema.get_field(name).unwrap_or_else(|_| panic!("missing field {name}"))
@@ -173,8 +274,11 @@ fn central_index_persists_profile_and_stores_document_record_once() {
     let scratch = ScratchDirectory::new();
     let records = fixtures();
     let index = build_tantivy(scratch.path(), &records).expect("central index should build");
-    assert_eq!(fs::read_to_string(scratch.path().join("profile.json")).unwrap(),
-        "{\"index_profile\":\"tantivy-central-v2\"}\n");
+    assert_eq!(
+        index.load_metas().unwrap().payload.as_deref(),
+        Some("{\"index_profile\":\"tantivy-central-v2\"}")
+    );
+    assert!(!scratch.path().join("profile.json").exists());
 
     let content = field(&index.schema(), FIELD_CONTENT);
     let identity = field(&index.schema(), FIELD_IDENTITY);
@@ -252,9 +356,9 @@ fn exact_fast_filter_fields_match_only_their_value() {
     let identity = field(&schema, FIELD_IDENTITY);
     let reader = index.reader().expect("index reader should open");
     let searcher = reader.searcher();
-
     for (name, value, expected) in [
         (FIELD_SOURCE, "archive", "archive:alpha:other"),
+        (FIELD_DOMAIN, "alpha/deep", "knowledge:alpha/deep:runbook"),
         (FIELD_DOMAIN_PREFIXES, "alpha/deep", "knowledge:alpha/deep:runbook"),
         (FIELD_KIND, "runbook", "knowledge:alpha/deep:runbook"),
         (FIELD_KEYWORDS, "tantivy", "knowledge:alpha:search-guide"),
