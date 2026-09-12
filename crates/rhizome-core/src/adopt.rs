@@ -703,9 +703,10 @@ pub(crate) fn active_gate(text: &str, registry: &Path) -> bool {
         if is_enabled_skip(trimmed) {
             disabled = true;
         }
-        if in_command && indent == 6 && trimmed.starts_with("<<:") {
-            // YAML merge keys can inject skip/run values that this strict
-            // line parser cannot safely resolve.
+        if in_command && indent == 6 && (trimmed.starts_with("<<:") || trimmed.starts_with("glob:"))
+        {
+            // YAML merge keys and command globs can hide or exclude staged
+            // files from the strict gate command.
             return false;
         }
         match indent {

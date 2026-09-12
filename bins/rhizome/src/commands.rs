@@ -1064,19 +1064,6 @@ fn relocate(args: &ArgMatches) -> RunResult {
     let target = args
         .get_one::<String>("target")
         .expect("clap required target");
-    if target.split(':').next() != Some(source_name.as_str()) {
-        return RunResult::failure(
-            Value::Null,
-            vec![
-                Diagnostic::error(
-                    "KBV2-RELOCATE-SOURCE",
-                    "relocate target source does not match --source",
-                )
-                .for_field("source"),
-            ],
-            1,
-        );
-    }
     let plan = match plan_relocate(&registry, &path, target) {
         Ok(plan) => plan,
         Err(error) => {
