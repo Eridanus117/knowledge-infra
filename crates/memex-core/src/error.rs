@@ -32,20 +32,30 @@ impl fmt::Display for MemexError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CommitTime { path, message } => {
-                write!(formatter, "commit time failed for {}: {message}", path.display())
+                write!(
+                    formatter,
+                    "commit time failed for {}: {message}",
+                    path.display()
+                )
             }
             Self::InvalidDocument {
                 line: Some(line),
                 field,
                 message,
-            } => write!(formatter, "invalid document at line {line}, field {field}: {message}"),
+            } => write!(
+                formatter,
+                "invalid document at line {line}, field {field}: {message}"
+            ),
             Self::InvalidDocument {
                 line: None,
                 field,
                 message,
             } => write!(formatter, "invalid document field {field}: {message}"),
             Self::InvalidSchema { line, actual } => {
-                write!(formatter, "invalid document schema at line {line}: {actual}")
+                write!(
+                    formatter,
+                    "invalid document schema at line {line}: {actual}"
+                )
             }
             Self::InvalidHash { line, field } => {
                 write!(formatter, "invalid {field} at line {line}")

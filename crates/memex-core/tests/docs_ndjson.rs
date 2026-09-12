@@ -22,9 +22,7 @@ impl ScratchDirectory {
             .expect("system clock should follow the Unix epoch")
             .as_nanos();
         let sequence = NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "memex-docs-ndjson-{timestamp}-{sequence}"
-        ));
+        let path = std::env::temp_dir().join(format!("memex-docs-ndjson-{timestamp}-{sequence}"));
         copy_tree(&fixture_root(), &path);
         Self { path }
     }
@@ -96,8 +94,8 @@ fn snapshot() -> (ScratchDirectory, rhizome_core::SourceSnapshot) {
 
 fn compiled_records() -> (ScratchDirectory, Vec<DocumentRecord>) {
     let (scratch, snapshot) = snapshot();
-    let records = compile_snapshot(&snapshot, &FixedCommitTime)
-        .expect("docs fixture should compile");
+    let records =
+        compile_snapshot(&snapshot, &FixedCommitTime).expect("docs fixture should compile");
     (scratch, records)
 }
 
@@ -118,10 +116,16 @@ fn compile_filters_root_index_and_domain_outside_files() {
             "knowledge:beta:no-title",
         ]
     );
-    assert!(records.iter().all(|record| record.source_path != "INDEX.md"));
-    assert!(records
-        .iter()
-        .all(|record| record.source_path != "outside.md"));
+    assert!(
+        records
+            .iter()
+            .all(|record| record.source_path != "INDEX.md")
+    );
+    assert!(
+        records
+            .iter()
+            .all(|record| record.source_path != "outside.md")
+    );
     assert_eq!(records[0].kind, "index");
     assert_eq!(records[0].domain_prefixes, ["alpha"]);
 }
@@ -159,13 +163,11 @@ fn encode_is_canonical_fixed_order_escaped_and_lf_terminated() {
         "{\"schema\":\"knowledge-doc-v2\",\"identity\":\"knowledge:alpha:INDEX\",\"source\":\"knowledge\",\"domain\":\"alpha\",\"domain_prefixes\":[\"alpha\"],\"title\":"
     ));
     assert!(
-        text.lines()
-            .any(|line| line.contains("\\\"quote\\\"")),
+        text.lines().any(|line| line.contains("\\\"quote\\\"")),
         "fixture should exercise JSON escaping"
     );
     let expected = fs::read(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fixtures/memex/docs/expected.ndjson"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/memex/docs/expected.ndjson"),
     )
     .expect("public expected docs stream should be readable");
     assert_eq!(bytes, expected);
@@ -314,7 +316,12 @@ fn document_record_exposes_schema_and_stable_hash_projection() {
     let record = &records[0];
     assert_eq!(record.schema, "knowledge-doc-v2");
     assert_eq!(record.compiled_hash.len(), 64);
-    assert!(record.compiled_hash.chars().all(|character| character.is_ascii_hexdigit()));
+    assert!(
+        record
+            .compiled_hash
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    );
     let _: &str = record.schema;
 }
 fn recompute_compiled_hash(record: &DocumentRecord) -> String {

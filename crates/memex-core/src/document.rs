@@ -49,11 +49,12 @@ pub fn compile_snapshot(
         let locator = &snapshot_note.locator;
         let note = &snapshot_note.note;
         let source_path = source_relative_path(source_root, &locator.path)?;
-        let original = std::str::from_utf8(&note.original).map_err(|_| MemexError::InvalidDocument {
-            line: None,
-            field: "source_hash",
-            message: "source bytes must be valid UTF-8",
-        })?;
+        let original =
+            std::str::from_utf8(&note.original).map_err(|_| MemexError::InvalidDocument {
+                line: None,
+                field: "source_hash",
+                message: "source bytes must be valid UTF-8",
+            })?;
         let body = std::str::from_utf8(&note.body).map_err(|_| MemexError::InvalidDocument {
             line: None,
             field: "body_text",
@@ -194,10 +195,12 @@ pub(crate) fn canonical_record_json(record: &DocumentRecord) -> Vec<u8> {
 }
 
 fn source_relative_path(root: &Path, path: &Path) -> Result<String, MemexError> {
-    let relative = path.strip_prefix(root).map_err(|_| MemexError::InvalidPath {
-        line: 0,
-        path: path.display().to_string(),
-    })?;
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| MemexError::InvalidPath {
+            line: 0,
+            path: path.display().to_string(),
+        })?;
     let mut output = String::new();
     for component in relative.components() {
         let Component::Normal(component) = component else {

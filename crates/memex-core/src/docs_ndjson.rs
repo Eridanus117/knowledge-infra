@@ -54,7 +54,9 @@ pub fn decode_ndjson(bytes: &[u8]) -> Result<Vec<DocumentRecord>, MemexError> {
         return Ok(Vec::new());
     }
     if !bytes.ends_with(b"\n") {
-        return Err(MemexError::NonCanonicalNdjson { line: line_count(bytes) });
+        return Err(MemexError::NonCanonicalNdjson {
+            line: line_count(bytes),
+        });
     }
     let content = &bytes[..bytes.len() - 1];
     if content.is_empty() {
@@ -167,13 +169,25 @@ fn validate_record(record: &DocumentRecord, line: usize) -> Result<(), MemexErro
         });
     }
     if record.identity.is_empty() || record.identity.chars().any(char::is_control) {
-        return Err(invalid_document(line, "identity", "identity must be non-empty and one-line"));
+        return Err(invalid_document(
+            line,
+            "identity",
+            "identity must be non-empty and one-line",
+        ));
     }
     if record.source.is_empty() || record.source.chars().any(char::is_control) {
-        return Err(invalid_document(line, "source", "source must be non-empty and one-line"));
+        return Err(invalid_document(
+            line,
+            "source",
+            "source must be non-empty and one-line",
+        ));
     }
     if record.domain.is_empty() || record.domain.chars().any(char::is_control) {
-        return Err(invalid_document(line, "domain", "domain must be non-empty and one-line"));
+        return Err(invalid_document(
+            line,
+            "domain",
+            "domain must be non-empty and one-line",
+        ));
     }
     if record.domain_prefixes.is_empty()
         || record
@@ -220,11 +234,19 @@ fn validate_record(record: &DocumentRecord, line: usize) -> Result<(), MemexErro
         record.kind.as_str(),
         "spec" | "reference" | "runbook" | "decision" | "research" | "note" | "index"
     ) {
-        return Err(invalid_document(line, "kind", "kind is not a known note kind"));
+        return Err(invalid_document(
+            line,
+            "kind",
+            "kind is not a known note kind",
+        ));
     }
     if let Some(status) = &record.status {
         if status != "frozen" {
-            return Err(invalid_document(line, "status", "status is not a known note status"));
+            return Err(invalid_document(
+                line,
+                "status",
+                "status is not a known note status",
+            ));
         }
     }
     if let Some(commit_time) = &record.commit_time {
