@@ -15,7 +15,8 @@ use rhizome_core::human_index::{apply_human_index, check_human_index, plan_human
 use rhizome_core::links::check_links_and_code;
 use rhizome_core::relocate::{apply_relocate, plan_relocate};
 use rhizome_core::source::{
-    SourceContext, discover_source, parse_note_file_nofollow, validate_parent_path_nofollow,
+    SourceContext, discover_source, parse_note_file_nofollow, read_regular_file_nofollow_bounded,
+    validate_parent_path_nofollow,
 };
 use serde_json::{Value, json};
 use std::env;
@@ -601,29 +602,7 @@ fn adopt(args: &ArgMatches) -> RunResult {
         Ok(plan) => plan,
         Err(error) => return RunResult::failure(Value::Null, error.into_diagnostics(), 1),
     };
-    let apply_result = apply_adopt_with_hook(&plan, |repo| {
-        let status = Command::new("lefthook")
-            .arg("install")
-            .current_dir(repo)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map_err(|_| {
-                AdoptError::Diagnostics(vec![
-                    Diagnostic::error("KBV2-ADOPT-LEFTHOOK", "lefthook install could not be run")
-                        .at_path(repo.to_path_buf()),
-                ])
-            })?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(AdoptError::Diagnostics(vec![
-                Diagnostic::error("KBV2-ADOPT-LEFTHOOK", "lefthook install failed")
-                    .at_path(repo.to_path_buf()),
-            ]))
-        }
-    });
+    let apply_result = apply_adopt_with_hook(&plan, install_lefthook);
     if let Err(error) = apply_result {
         return RunResult::failure(Value::Null, error.into_diagnostics(), 1);
     }
@@ -675,6 +654,148 @@ fn doctor(args: &ArgMatches) -> RunResult {
     } else {
         RunResult::failure(json!(rows), diagnostics, 1)
     }
+}
+fn install_lefthook(repo: &Path) -> Result<(), AdoptError> {
+    let hooks_dir = effective_hooks_dir(repo)?;
+    let pre_commit = hooks_dir.join("pre-commit");
+    if let Some(bytes) = read_existing_hook(&pre_commit)? {
+        if hook_invokes_lefthook(&bytes) {
+            return Ok(());
+        }
+        return Err(AdoptError::Diagnostics(vec![
+            Diagnostic::error(
+                "KBV2-ADOPT-HOOK-CONFLICT",
+                "an existing pre-commit hook is managed by another tool",
+            )
+            .at_path(pre_commit),
+        ]));
+    }
+
+    let status = Command::new("lefthook")
+        .arg("install")
+        .current_dir(repo)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|_| {
+            AdoptError::Diagnostics(vec![
+                Diagnostic::error("KBV2-ADOPT-LEFTHOOK", "lefthook install could not be run")
+                    .at_path(repo.to_path_buf()),
+            ])
+        })?;
+    if !status.success() {
+        return Err(AdoptError::Diagnostics(vec![
+            Diagnostic::error("KBV2-ADOPT-LEFTHOOK", "lefthook install failed")
+                .at_path(repo.to_path_buf()),
+        ]));
+    }
+    let Some(bytes) = read_existing_hook(&pre_commit)? else {
+        return Err(AdoptError::Diagnostics(vec![
+            Diagnostic::error(
+                "KBV2-ADOPT-LEFTHOOK",
+                "lefthook install did not create a pre-commit hook",
+            )
+            .at_path(pre_commit),
+        ]));
+    };
+    if !hook_invokes_lefthook(&bytes) {
+        return Err(AdoptError::Diagnostics(vec![
+            Diagnostic::error(
+                "KBV2-ADOPT-HOOK-CONFLICT",
+                "lefthook install did not install the expected hook",
+            )
+            .at_path(pre_commit),
+        ]));
+    }
+    Ok(())
+}
+
+fn effective_hooks_dir(repo: &Path) -> Result<PathBuf, AdoptError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["config", "--get", "core.hooksPath"])
+        .output()
+        .map_err(|_| {
+            AdoptError::Diagnostics(vec![
+                Diagnostic::error(
+                    "KBV2-ADOPT-HOOK",
+                    "Git hook configuration could not be read",
+                )
+                .at_path(repo.to_path_buf()),
+            ])
+        })?;
+    if output.status.success() {
+        let raw = std::str::from_utf8(&output.stdout)
+            .ok()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                AdoptError::Diagnostics(vec![
+                    Diagnostic::error(
+                        "KBV2-ADOPT-HOOK",
+                        "Git hook configuration is not valid UTF-8",
+                    )
+                    .at_path(repo.to_path_buf()),
+                ])
+            })?;
+        let path = PathBuf::from(raw);
+        return Ok(if path.is_absolute() {
+            path
+        } else {
+            repo.join(path)
+        });
+    }
+    if output.status.code() == Some(1) {
+        Ok(repo.join(".git/hooks"))
+    } else {
+        Err(AdoptError::Diagnostics(vec![
+            Diagnostic::error(
+                "KBV2-ADOPT-HOOK",
+                "Git hook configuration could not be read",
+            )
+            .at_path(repo.to_path_buf()),
+        ]))
+    }
+}
+
+fn read_existing_hook(path: &Path) -> Result<Option<Vec<u8>>, AdoptError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            Err(AdoptError::Diagnostics(vec![
+                Diagnostic::error(
+                    "KBV2-ADOPT-HOOK-CONFLICT",
+                    "the effective pre-commit hook is not a regular file",
+                )
+                .at_path(path.to_path_buf()),
+            ]))
+        }
+        Ok(_) => read_regular_file_nofollow_bounded(path, 1024 * 1024)
+            .map(Some)
+            .map_err(|_| {
+                AdoptError::Diagnostics(vec![
+                    Diagnostic::error(
+                        "KBV2-ADOPT-HOOK",
+                        "the effective pre-commit hook could not be read",
+                    )
+                    .at_path(path.to_path_buf()),
+                ])
+            }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(AdoptError::Diagnostics(vec![
+            Diagnostic::error(
+                "KBV2-ADOPT-HOOK",
+                "the effective pre-commit hook could not be read",
+            )
+            .at_path(path.to_path_buf()),
+        ])),
+    }
+}
+
+fn hook_invokes_lefthook(bytes: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(bytes);
+    text.contains("lefthook") || text.contains("rhizome check")
 }
 
 fn index(args: &ArgMatches) -> RunResult {

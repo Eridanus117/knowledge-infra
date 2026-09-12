@@ -14,6 +14,9 @@ pub const MERMAID_ADAPTER_CODE: &str = "KBV2-MERMAID-ADAPTER";
 pub const MERMAID_ADAPTER_MESSAGE: &str = "Mermaid adapter failed";
 const ADAPTER_ENV: &str = "RHIZOME_MERMAID_ADAPTER";
 const ADAPTER_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_OUTPUT_BYTES: u64 = 8 * 1024 * 1024;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 /// Validate Mermaid fenced blocks through the configured sidecar boundary.
 /// The source parser remains authoritative: adapter failures become findings, never core errors.
@@ -49,27 +52,31 @@ pub fn check_mermaid(path: &Path, bytes: &[u8]) -> Vec<Diagnostic> {
     {
         return vec![adapter_diagnostic(path)];
     }
-    if Instant::now() >= deadline {
-        return vec![adapter_diagnostic(path)];
-    }
-    let (stdout_path, stdout) = match create_temp_file("stdout") {
-        Ok(file) => file,
-        Err(_) => return vec![adapter_diagnostic(path)],
-    };
-    let _stdout_guard = TempFilePath(stdout_path.clone());
-    if Instant::now() >= deadline {
-        return vec![adapter_diagnostic(path)];
-    }
     let mut child = match Command::new(adapter)
         .stdin(Stdio::from(stdin))
-        .stdout(Stdio::from(stdout))
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
     {
         Ok(child) => child,
         Err(_) => return vec![adapter_diagnostic(path)],
     };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            kill_and_reap(&mut child);
+            return vec![adapter_diagnostic(path)];
+        }
+    };
+    let (sender, receiver) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = sender.send(read_stdout_bounded(stdout));
+    });
     let status = loop {
+        if matches!(receiver.try_recv(), Ok(Ok((_, true)))) {
+            kill_and_reap(&mut child);
+            return vec![adapter_diagnostic(path)];
+        }
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
@@ -82,13 +89,13 @@ pub fn check_mermaid(path: &Path, bytes: &[u8]) -> Vec<Diagnostic> {
     if !matches!(status.code(), Some(0) | Some(1)) {
         return vec![adapter_diagnostic(path)];
     }
-    let (output, overflow) = match read_stdout_bounded(&stdout_path, deadline) {
-        Ok(result) => result,
-        Err(()) => return vec![adapter_diagnostic(path)],
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let output = match receiver.recv_timeout(remaining) {
+        Ok(Ok((output, false))) => output,
+        Ok(Ok((_, true))) | Ok(Err(())) | Err(_) => {
+            return vec![adapter_diagnostic(path)];
+        }
     };
-    if overflow {
-        return vec![adapter_diagnostic(path)];
-    }
     parse_findings(path, &output)
 }
 
@@ -101,12 +108,11 @@ fn create_temp_file(suffix: &str) -> std::io::Result<(PathBuf, File)> {
         let path = directory.join(format!(
             "rhizome-mermaid-{process}-{sequence}-{attempt}-{suffix}.tmp"
         ));
-        match OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(&path)
-        {
+        let mut options = OpenOptions::new();
+        options.create_new(true).read(true).write(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        match options.open(&path) {
             Ok(file) => return Ok((path, file)),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error),
@@ -131,26 +137,16 @@ fn kill_and_reap(child: &mut Child) {
     let _ = child.wait();
 }
 
-fn read_stdout_bounded(path: &Path, deadline: Instant) -> Result<(Vec<u8>, bool), ()> {
-    const MAX_OUTPUT: usize = 8 * 1024 * 1024;
-    let mut stdout = File::open(path).map_err(|_| ())?;
-    let mut bytes = Vec::new();
-    let mut buffer = [0_u8; 8192];
-    let mut overflow = false;
-    loop {
-        if Instant::now() >= deadline {
-            return Err(());
-        }
-        let size = stdout.read(&mut buffer).map_err(|_| ())?;
-        if size == 0 {
-            break;
-        }
-        let keep = size.min(MAX_OUTPUT.saturating_sub(bytes.len()));
-        bytes.extend_from_slice(&buffer[..keep]);
-        overflow |= keep < size;
-        if overflow {
-            break;
-        }
+fn read_stdout_bounded(mut stdout: impl Read) -> Result<(Vec<u8>, bool), ()> {
+    let mut bytes = Vec::with_capacity(MAX_OUTPUT_BYTES as usize);
+    stdout
+        .by_ref()
+        .take(MAX_OUTPUT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ())?;
+    let overflow = bytes.len() > MAX_OUTPUT_BYTES as usize;
+    if overflow {
+        bytes.truncate(MAX_OUTPUT_BYTES as usize);
     }
     Ok((bytes, overflow))
 }

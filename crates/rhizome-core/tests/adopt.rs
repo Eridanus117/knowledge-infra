@@ -112,7 +112,13 @@ fn adopt_is_idempotent_and_does_not_rewrite_existing_domain_or_registry_bytes() 
     let hook_after_first = fs::read(repo.join("lefthook.yml")).expect("gate should be readable");
 
     let second = plan_adopt(&request).expect("repeat adoption should be planable");
-    apply_adopt(&second).expect("repeat adoption should apply idempotently");
+    let mut hook_called = false;
+    apply_adopt_with_hook(&second, |_| {
+        hook_called = true;
+        Ok(())
+    })
+    .expect("repeat adoption should apply idempotently");
+    assert!(hook_called, "existing valid gates must be installed/probed");
     assert_eq!(
         fs::read(registry_path).expect("registry should remain readable"),
         registry_after_first

@@ -432,18 +432,16 @@ where
         }
         gate_created = true;
     }
-    if plan.gate.is_some() {
-        if let Err(error) = hook(&plan.repo) {
-            return Err(rollback_or_preserve(
-                plan,
-                &created_dirs,
-                registry_changed,
-                human_index_created,
-                index_created,
-                gate_created,
-                error,
-            ));
-        }
+    if let Err(error) = hook(&plan.repo) {
+        return Err(rollback_or_preserve(
+            plan,
+            &created_dirs,
+            registry_changed,
+            human_index_created,
+            index_created,
+            gate_created,
+            error,
+        ));
     }
     debug_assert!(!gate_created || plan.gate.is_some());
     Ok(())
