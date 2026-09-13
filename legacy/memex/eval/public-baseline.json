@@ -1,0 +1,43 @@
+{
+  "schema": "public-eval-baseline-v1",
+  "fixture_id": "public-evaluator-v1",
+  "fixture_sha256": "5085369113ee63995ec88486a7da76fbf0c807d6a8864b10c841b5590b3f8f09",
+  "lanes": {
+    "lexical": {
+      "_overall": 1.0,
+      "_repo_true=source-alpha": 1.0,
+      "_repo_true=source-beta": 1.0,
+      "_repo_true=source-delta": 1.0,
+      "_repo_true=source-gamma": 1.0,
+      "_repo_group=long_tail": 1.0,
+      "qtype=TB": 1.0,
+      "qtype=NL": 1.0,
+      "_slice=lexical_dependent": 1.0,
+      "_slice=semantic_recovery": 1.0
+    },
+    "hybrid": {
+      "_overall": 1.0,
+      "_repo_true=source-alpha": 1.0,
+      "_repo_true=source-beta": 1.0,
+      "_repo_true=source-delta": 1.0,
+      "_repo_true=source-gamma": 1.0,
+      "_repo_group=long_tail": 1.0,
+      "qtype=TB": 1.0,
+      "qtype=NL": 1.0,
+      "_slice=lexical_dependent": 1.0,
+      "_slice=semantic_recovery": 1.0
+    }
+  },
+  "hybrid_tracked": [
+    "_overall",
+    "_repo_true=source-alpha",
+    "_repo_true=source-beta",
+    "_repo_true=source-delta",
+    "_repo_true=source-gamma",
+    "_repo_group=long_tail",
+    "qtype=TB",
+    "qtype=NL",
+    "_slice=lexical_dependent",
+    "_slice=semantic_recovery"
+  ]
+}
