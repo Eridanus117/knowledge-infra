@@ -4,12 +4,12 @@
 
 ### Issue tracker
 
-Issues live in this repo's GitHub Issues (`Eridanus117/knowledge-infra`), accessed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues 在本仓 GitHub Issues（`Eridanus117/knowledge-infra`）里，`gh` 在仓内自动识别。See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+使用默认五个标签：`needs-triage`、`needs-info`、`ready-for-agent`、`ready-for-human`、`wontfix`。See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-Single-context: one root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/domain.md`.
+Single-context：根 `CONTEXT.md` + `docs/adr/`（按需生成）。See `docs/agents/domain.md`.
